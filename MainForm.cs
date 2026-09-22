@@ -68,7 +68,7 @@ public sealed class MainForm : Form
         };
         root.Controls.Add(title, 0, 0);
 
-        var settings = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 4, AutoSize = true };
+        var settings = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 5, AutoSize = true };
         settings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         settings.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -81,7 +81,6 @@ public sealed class MainForm : Form
         settings.Controls.Add(new Label { Text = "GFX", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 8, 4, 0) }, 3, 0);
         settings.Controls.Add(_gfx, 4, 0);
 
-        settings.ColumnCount = 5;
         settings.Controls.Add(new Label { Text = "새 PNG 프레임", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 8, 8, 0) }, 0, 1);
         settings.Controls.Add(_png, 1, 1);
         var browsePng = new Button { Text = "폴더 선택", AutoSize = true };
