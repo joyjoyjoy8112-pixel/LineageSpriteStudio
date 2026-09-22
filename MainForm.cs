@@ -22,7 +22,8 @@ public sealed class MainForm : Form
 
     private readonly List<SpriteTarget> _targets = new();
     private readonly Dictionary<int, List<string>> _pngByPart = new();
-    private readonly Dictionary<int, int> _originalFrames = new();\n    private readonly Dictionary<int, bool> _originalZlib = new();
+    private readonly Dictionary<int, int> _originalFrames = new();
+    private readonly Dictionary<int, bool> _originalZlib = new();
     private readonly List<SpritePak> _opened = new();
     private readonly Stopwatch _watch = new();
     private readonly System.Windows.Forms.Timer _elapsedTimer = new() { Interval = 250 };
@@ -191,7 +192,8 @@ public sealed class MainForm : Form
             int totalFrames = _originalFrames.Values.Sum();
             int pngCount = _pngByPart.Values.Sum(x => x.Count);
             Log($"[검색] GFX {gfx}: {_targets.Count}개 동작 SPR 찾음");
-            Log($"[검색] 원본 프레임 합계: {totalFrames} / 새 PNG 인식: {pngCount}");\n            Log($"[검색] ZLIB SPR: {_originalZlib.Values.Count(v => v)}개 / RAW SPR: {_originalZlib.Values.Count(v => !v)}개");
+            Log($"[검색] 원본 프레임 합계: {totalFrames} / 새 PNG 인식: {pngCount}");
+            Log($"[검색] ZLIB SPR: {_originalZlib.Values.Count(v => v)}개 / RAW SPR: {_originalZlib.Values.Count(v => !v)}개");
 
             var misplaced = _targets.Where(t => SpritePak.ExpectedPakIndex(t.Entry.FileName) != t.PakIndex).ToList();
             if (misplaced.Count == 0)
