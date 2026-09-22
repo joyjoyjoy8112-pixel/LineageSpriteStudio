@@ -12,7 +12,16 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _gfx = new() { Minimum = 0, Maximum = 999999, Value = 61, Width = 100 };
     private readonly Button _scan = new() { Text = "GFX 전체 검색", AutoSize = true };
     private readonly Button _apply = new() { Text = "백업 후 클라이언트에 적용", AutoSize = true, Enabled = false };
-    private readonly DataGridView _grid = new() { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
+    private readonly DataGridView _grid = new()
+    {
+        Dock = DockStyle.Fill,
+        ReadOnly = true,
+        AllowUserToAddRows = false,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+        MultiSelect = false,
+        RowHeadersVisible = true
+    };
     private readonly RichTextBox _log = new() { Dock = DockStyle.Fill, ReadOnly = true, BackColor = Color.FromArgb(24, 26, 31), ForeColor = Color.Gainsboro, BorderStyle = BorderStyle.None };
     private readonly Label _status = new() { Text = "대기 중", AutoSize = true };
     private readonly Label _elapsed = new() { Text = "00:00", AutoSize = true };
@@ -24,6 +33,10 @@ public sealed class MainForm : Form
     private readonly Button _previewPrev = new() { Text = "◀", Width = 40 };
     private readonly Button _previewNext = new() { Text = "▶", Width = 40 };
     private readonly Label _previewInfo = new() { Text = "동작을 선택하세요.", AutoSize = true, Anchor = AnchorStyles.Left };
+    private readonly Button _autoPlayButton = new() { Text = "▶ 자동재생", AutoSize = true };
+    private readonly ComboBox _playSpeed = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 86 };
+    private readonly ComboBox _directionMap = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 145 };
+    private readonly System.Windows.Forms.Timer _autoPlayTimer = new() { Interval = 180 };
     private int _previewPart = -1;
     private bool _changingPreviewFrame;
 
@@ -37,7 +50,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.3";
+        Text = "리니지 Sprite Studio V2.2.4";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -49,12 +62,47 @@ public sealed class MainForm : Form
         _scan.Click += async (_, _) => await ScanAsync();
         _apply.Click += async (_, _) => await ApplyAsync();
         _grid.SelectionChanged += (_, _) => SelectPreviewFromGrid();
+        _grid.CellClick += (_, e) =>
+        {
+            if (e.RowIndex < 0) return;
+            _grid.ClearSelection();
+            _grid.Rows[e.RowIndex].Selected = true;
+            _grid.CurrentCell = _grid.Rows[e.RowIndex].Cells[Math.Max(0, e.ColumnIndex)];
+            SelectPreviewFromGrid();
+        };
+
         _previewFrame.ValueChanged += (_, _) => { if (!_changingPreviewFrame) ShowSelectedPreview(); };
         _previewPrev.Click += (_, _) => { if (_previewFrame.Value > _previewFrame.Minimum) _previewFrame.Value--; };
         _previewNext.Click += (_, _) => { if (_previewFrame.Value < _previewFrame.Maximum) _previewFrame.Value++; };
 
+        _playSpeed.Items.AddRange(new object[] { "80 ms", "120 ms", "180 ms", "250 ms", "400 ms" });
+        _playSpeed.SelectedItem = "180 ms";
+        _playSpeed.SelectedIndexChanged += (_, _) =>
+        {
+            if (_playSpeed.SelectedItem is string s && int.TryParse(s.Split(' ')[0], out int ms))
+                _autoPlayTimer.Interval = Math.Clamp(ms, 50, 1000);
+        };
+
+        _directionMap.Items.AddRange(new object[]
+        {
+            "방향 그대로",
+            "방향 순서 반전",
+            "방향 +1", "방향 +2", "방향 +3", "방향 +4",
+            "방향 +5", "방향 +6", "방향 +7"
+        });
+        _directionMap.SelectedIndex = 0;
+        _directionMap.SelectedIndexChanged += (_, _) =>
+        {
+            RebuildGrid();
+            SelectPreviewFromGrid();
+        };
+
+        _autoPlayButton.Click += (_, _) => ToggleAutoPlay();
+        _autoPlayTimer.Tick += (_, _) => AdvanceAutoPlay();
+
         FormClosed += (_, _) =>
         {
+            _autoPlayTimer.Stop();
             foreach (var p in _opened) p.Dispose();
             _originalPreview.Image?.Dispose();
             _newPreview.Image?.Dispose();
@@ -73,7 +121,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.3  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.2.4  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -101,6 +149,8 @@ public sealed class MainForm : Form
         buttons.Controls.Add(_scan);
         buttons.Controls.Add(_apply);
         buttons.Controls.Add(_backup);
+        buttons.Controls.Add(new Label { Text = "방향 보정", AutoSize = true, Margin = new Padding(10, 6, 3, 0) });
+        buttons.Controls.Add(_directionMap);
         settings.Controls.Add(buttons, 3, 1);
         settings.SetColumnSpan(buttons, 2);
 
@@ -172,6 +222,8 @@ public sealed class MainForm : Form
         frameBar.Controls.Add(new Label { Text = "프레임", AutoSize = true, Margin = new Padding(8, 6, 3, 0) });
         frameBar.Controls.Add(_previewFrame);
         frameBar.Controls.Add(_previewNext);
+        frameBar.Controls.Add(_autoPlayButton);
+        frameBar.Controls.Add(_playSpeed);
         frameBar.Controls.Add(_previewInfo);
         compare.Controls.Add(frameBar, 0, 2);
         compare.SetColumnSpan(frameBar, 2);
@@ -339,7 +391,7 @@ public sealed class MainForm : Form
         foreach (var t in _targets)
         {
             int frames = _originalFrames.TryGetValue(t.Part, out var fc) ? fc : 0;
-            int png = _pngByPart.TryGetValue(t.Part, out var list) ? list.Count : 0;
+            int png = GetMappedPngFiles(t.Part)?.Count ?? 0;
             int expected = SpritePak.ExpectedPakIndex(t.Entry.FileName);
             string dist = expected == t.PakIndex ? "OK" : $"예상 {expected:00}";
             int row = _grid.Rows.Add(t.Part, t.Entry.FileName, $"Sprite{t.PakIndex:00}.pak", frames, png, dist);
@@ -352,8 +404,12 @@ public sealed class MainForm : Form
         if (_targets.Count == 0) { await ScanAsync(); if (_targets.Count == 0) return; }
         LoadPngMap();
 
-        var missing = _targets.Where(t => !_pngByPart.TryGetValue(t.Part, out var p) || p.Count == 0).ToList();
-        var mismatch = _targets.Where(t => _pngByPart.TryGetValue(t.Part, out var p) && _originalFrames.TryGetValue(t.Part, out var f) && p.Count != f).ToList();
+        var missing = _targets.Where(t => GetMappedPngFiles(t.Part) is not { Count: > 0 }).ToList();
+        var mismatch = _targets.Where(t =>
+        {
+            var p = GetMappedPngFiles(t.Part);
+            return p is { Count: > 0 } && _originalFrames.TryGetValue(t.Part, out var f) && p.Count != f;
+        }).ToList();
         if (missing.Count > 0 || mismatch.Count > 0)
         {
             string msg = $"적용을 중단했습니다.\n\nPNG가 없는 동작: {missing.Count}개\n원본 프레임 수와 다른 동작: {mismatch.Count}개\n\n전체 168개 동작을 정확히 대응시킨 뒤 적용해야 게임에서 원본이 남지 않습니다.";
@@ -401,7 +457,7 @@ public sealed class MainForm : Form
             int total = _targets.Count;
             foreach (var t in _targets)
             {
-                var pngs = _pngByPart[t.Part];
+                var pngs = GetMappedPngFiles(t.Part) ?? throw new InvalidDataException($"동작 {t.Part}의 PNG를 찾지 못했습니다.");
                 SetProgress(8 + (int)(42.0 * done / total), $"SPR 생성 중... {done + 1}/{total} · {t.Entry.FileName}");
                 byte[] rawSpr = await Task.Run(() => SprEncoder.CreateFromPngs(pngs));
                 bool useZlib = _originalZlib.TryGetValue(t.Part, out var z) && z;
@@ -452,7 +508,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2.3 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.2.4 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -527,7 +583,7 @@ public sealed class MainForm : Form
 
         _previewPart = part;
         int originalCount = _originalFrames.TryGetValue(part, out var ofc) ? ofc : 0;
-        int newCount = _pngByPart.TryGetValue(part, out var files) ? files.Count : 0;
+        int newCount = GetMappedPngFiles(part)?.Count ?? 0;
         int max = Math.Max(0, Math.Max(originalCount, newCount) - 1);
 
         _changingPreviewFrame = true;
@@ -545,7 +601,8 @@ public sealed class MainForm : Form
         int frame = (int)_previewFrame.Value;
         var target = _targets.FirstOrDefault(t => t.Part == _previewPart);
         int originalCount = _originalFrames.TryGetValue(_previewPart, out var ofc) ? ofc : 0;
-        int newCount = _pngByPart.TryGetValue(_previewPart, out var files) ? files.Count : 0;
+        var files = GetMappedPngFiles(_previewPart);
+        int newCount = files?.Count ?? 0;
 
         try
         {
@@ -593,7 +650,67 @@ public sealed class MainForm : Form
         }
 
         string fileName = target?.Entry.FileName ?? $"{(int)_gfx.Value}-{_previewPart}.spr";
-        _previewInfo.Text = $"  {fileName} · 프레임 {frame + 1} / 원본 {originalCount} · 수정 {newCount}";
+        string directionText = _directionMap.SelectedItem?.ToString() ?? "방향 그대로";
+        _previewInfo.Text = $"  {fileName} · 프레임 {frame + 1} / 원본 {originalCount} · 수정 {newCount} · {directionText}";
+    }
+
+    private List<string>? GetMappedPngFiles(int targetPart)
+    {
+        if (_pngByPart.Count == 0) return null;
+
+        // 168 SPR = 21개 동작 × 8방향 구조를 기준으로 방향 그룹 안에서만 재매핑한다.
+        int groupStart = (targetPart / 8) * 8;
+        int dir = targetPart % 8;
+        int sourceDir = dir;
+
+        if (_directionMap.SelectedIndex == 1)
+        {
+            // 시계/반시계 순서가 반대인 세트: 0은 유지하고 1↔7, 2↔6, 3↔5.
+            sourceDir = (8 - dir) % 8;
+        }
+        else if (_directionMap.SelectedIndex >= 2)
+        {
+            int offset = _directionMap.SelectedIndex - 1; // +1 ... +7
+            sourceDir = (dir + offset) % 8;
+        }
+
+        int sourcePart = groupStart + sourceDir;
+        return _pngByPart.TryGetValue(sourcePart, out var files) ? files : null;
+    }
+
+    private void ToggleAutoPlay()
+    {
+        if (_autoPlayTimer.Enabled)
+        {
+            _autoPlayTimer.Stop();
+            _autoPlayButton.Text = "▶ 자동재생";
+            return;
+        }
+
+        if (_previewPart < 0) return;
+        _autoPlayTimer.Start();
+        _autoPlayButton.Text = "⏸ 정지";
+    }
+
+    private void AdvanceAutoPlay()
+    {
+        if (_previewPart < 0)
+        {
+            _autoPlayTimer.Stop();
+            _autoPlayButton.Text = "▶ 자동재생";
+            return;
+        }
+
+        if (_previewFrame.Maximum <= 0)
+        {
+            ShowSelectedPreview();
+            return;
+        }
+
+        if (_previewFrame.Value >= _previewFrame.Maximum)
+            _previewFrame.Value = 0;
+        else
+            _previewFrame.Value++;
     }
 
     private static string FindCaseInsensitive(string dir, string name)
