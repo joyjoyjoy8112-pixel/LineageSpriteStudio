@@ -34,6 +34,7 @@ public sealed class MainForm : Form
     private readonly Button _previewNext = new() { Text = "▶", Width = 40 };
     private readonly Label _previewInfo = new() { Text = "동작을 선택하세요.", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly Button _autoPlayButton = new() { Text = "▶ 자동재생", AutoSize = true };
+    private readonly CheckBox _playAllActions = new() { Text = "전체 168동작", Checked = true, AutoSize = true };
     private readonly ComboBox _playSpeed = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 86 };
     private readonly ComboBox _directionMap = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 145 };
     private readonly NumericUpDown _groupOffset = new() { Minimum = -20, Maximum = 20, Value = 0, Width = 62 };
@@ -56,7 +57,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.5";
+        Text = "리니지 Sprite Studio V2.2.6";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -137,7 +138,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.5  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.2.6  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -258,6 +259,7 @@ public sealed class MainForm : Form
         frameBar.Controls.Add(_previewFrame);
         frameBar.Controls.Add(_previewNext);
         frameBar.Controls.Add(_autoPlayButton);
+        frameBar.Controls.Add(_playAllActions);
         frameBar.Controls.Add(_playSpeed);
         frameBar.Controls.Add(_previewInfo);
         compare.Controls.Add(frameBar, 0, 2);
@@ -568,7 +570,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2.5 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.2.6 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -887,16 +889,47 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (_previewFrame.Maximum <= 0)
+        // 현재 SPR만 반복할지, 61-0 ~ 마지막 SPR까지 순서대로 모두 재생할지 선택.
+        if (!_playAllActions.Checked)
         {
-            ShowSelectedPreview();
+            if (_previewFrame.Maximum <= 0)
+            {
+                ShowSelectedPreview();
+                return;
+            }
+
+            if (_previewFrame.Value >= _previewFrame.Maximum)
+                _previewFrame.Value = 0;
+            else
+                _previewFrame.Value++;
             return;
         }
 
-        if (_previewFrame.Value >= _previewFrame.Maximum)
-            _previewFrame.Value = 0;
-        else
+        if (_previewFrame.Value < _previewFrame.Maximum)
+        {
             _previewFrame.Value++;
+            return;
+        }
+
+        // 현재 SPR의 마지막 프레임 다음에는 다음 SPR 행으로 이동.
+        int currentIndex = _targets.FindIndex(t => t.Part == _previewPart);
+        if (currentIndex < 0 || _targets.Count == 0)
+            return;
+
+        int nextIndex = (currentIndex + 1) % _targets.Count;
+        int nextPart = _targets[nextIndex].Part;
+
+        foreach (DataGridViewRow row in _grid.Rows)
+        {
+            if (Convert.ToInt32(row.Cells[0].Value) != nextPart) continue;
+            _grid.ClearSelection();
+            row.Selected = true;
+            _grid.CurrentCell = row.Cells[0];
+            _grid.FirstDisplayedScrollingRowIndex = Math.Max(0, row.Index - 2);
+            break;
+        }
+
+        SelectPreviewFromGrid();
     }
 
     private static string FindCaseInsensitive(string dir, string name)
@@ -919,6 +952,7 @@ public sealed class MainForm : Form
         _groupOffset.Enabled = !busy;
         _sourceGroup.Enabled = !busy;
         _autoMap.Enabled = !busy;
+        _playAllActions.Enabled = !busy;
         _mapSelectedGroup.Enabled = !busy;
         _clearSelectedGroupMap.Enabled = !busy;
         UseWaitCursor = busy;
