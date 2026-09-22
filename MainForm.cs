@@ -18,7 +18,14 @@ public sealed class MainForm : Form
     private readonly Label _elapsed = new() { Text = "00:00", AutoSize = true };
     private readonly AnimatedProgressBar _progress = new() { Dock = DockStyle.Fill, Height = 28 };
     private readonly CheckBox _backup = new() { Text = "적용 전 복구용 백업 생성", Checked = true, AutoSize = true };
-    private readonly PictureBox _preview = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 20, 24) };
+    private readonly PictureBox _originalPreview = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 20, 24) };
+    private readonly PictureBox _newPreview = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 20, 24) };
+    private readonly NumericUpDown _previewFrame = new() { Minimum = 0, Maximum = 0, Value = 0, Width = 72 };
+    private readonly Button _previewPrev = new() { Text = "◀", Width = 40 };
+    private readonly Button _previewNext = new() { Text = "▶", Width = 40 };
+    private readonly Label _previewInfo = new() { Text = "동작을 선택하세요.", AutoSize = true, Anchor = AnchorStyles.Left };
+    private int _previewPart = -1;
+    private bool _changingPreviewFrame;
 
     private readonly List<SpriteTarget> _targets = new();
     private readonly Dictionary<int, List<string>> _pngByPart = new();
@@ -30,7 +37,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.2";
+        Text = "리니지 Sprite Studio V2.2.3";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -41,12 +48,16 @@ public sealed class MainForm : Form
         _elapsedTimer.Tick += (_, _) => _elapsed.Text = _watch.Elapsed.ToString(@"mm\:ss");
         _scan.Click += async (_, _) => await ScanAsync();
         _apply.Click += async (_, _) => await ApplyAsync();
-        _grid.SelectionChanged += (_, _) => ShowSelectedPreview();
+        _grid.SelectionChanged += (_, _) => SelectPreviewFromGrid();
+        _previewFrame.ValueChanged += (_, _) => { if (!_changingPreviewFrame) ShowSelectedPreview(); };
+        _previewPrev.Click += (_, _) => { if (_previewFrame.Value > _previewFrame.Minimum) _previewFrame.Value--; };
+        _previewNext.Click += (_, _) => { if (_previewFrame.Value < _previewFrame.Maximum) _previewFrame.Value++; };
 
         FormClosed += (_, _) =>
         {
             foreach (var p in _opened) p.Dispose();
-            _preview.Image?.Dispose();
+            _originalPreview.Image?.Dispose();
+            _newPreview.Image?.Dispose();
         };
     }
 
@@ -62,7 +73,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.2  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.2.3  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -118,9 +129,54 @@ public sealed class MainForm : Form
         _grid.Columns.Add("Hash", "분배 검사");
         root.Controls.Add(_grid, 0, 2);
 
-        var lower = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 840 };
+        var lower = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 455 };
         lower.Panel1.Controls.Add(_log);
-        lower.Panel2.Controls.Add(_preview);
+
+        var compare = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Padding = new Padding(6) };
+        compare.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        compare.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        compare.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        compare.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        compare.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var originalLabel = new Label
+        {
+            Text = "원본 SPR",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font(Font.FontFamily, 10F, FontStyle.Bold),
+            Padding = new Padding(0, 2, 0, 5)
+        };
+        var newLabel = new Label
+        {
+            Text = "수정 PNG",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font(Font.FontFamily, 10F, FontStyle.Bold),
+            Padding = new Padding(0, 2, 0, 5)
+        };
+        compare.Controls.Add(originalLabel, 0, 0);
+        compare.Controls.Add(newLabel, 1, 0);
+        compare.Controls.Add(_originalPreview, 0, 1);
+        compare.Controls.Add(_newPreview, 1, 1);
+
+        var frameBar = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Padding = new Padding(4, 5, 4, 0)
+        };
+        frameBar.Controls.Add(_previewPrev);
+        frameBar.Controls.Add(new Label { Text = "프레임", AutoSize = true, Margin = new Padding(8, 6, 3, 0) });
+        frameBar.Controls.Add(_previewFrame);
+        frameBar.Controls.Add(_previewNext);
+        frameBar.Controls.Add(_previewInfo);
+        compare.Controls.Add(frameBar, 0, 2);
+        compare.SetColumnSpan(frameBar, 2);
+
+        lower.Panel2.Controls.Add(compare);
         root.Controls.Add(lower, 0, 3);
 
         var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, AutoSize = true, Padding = new Padding(0, 7, 0, 0) };
@@ -152,6 +208,7 @@ public sealed class MainForm : Form
             SetProgress(1, "IDX 분석 중...");
             _targets.Clear();
             _originalFrames.Clear();
+            _originalZlib.Clear();
             foreach (var p in _opened) p.Dispose();
             _opened.Clear();
 
@@ -203,6 +260,12 @@ public sealed class MainForm : Form
 
             SetProgress(100, $"검색 완료 · {_targets.Count}개 SPR");
             _apply.Enabled = _targets.Count > 0 && _pngByPart.Count > 0;
+            if (_grid.Rows.Count > 0)
+            {
+                _grid.ClearSelection();
+                _grid.Rows[0].Selected = true;
+                SelectPreviewFromGrid();
+            }
         }
         catch (Exception ex)
         {
@@ -389,7 +452,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.2.3 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -446,8 +509,8 @@ public sealed class MainForm : Form
 
             using var src = System.Drawing.Image.FromFile(first);
             var copy = new Bitmap(src);
-            var old = _preview.Image;
-            _preview.Image = copy;
+            var old = _newPreview.Image;
+            _newPreview.Image = copy;
             old?.Dispose();
             Log($"[미리보기] {Path.GetFileName(first)}");
         }
@@ -457,20 +520,80 @@ public sealed class MainForm : Form
         }
     }
 
-    private void ShowSelectedPreview()
+    private void SelectPreviewFromGrid()
     {
         if (_grid.SelectedRows.Count == 0) return;
         if (!int.TryParse(Convert.ToString(_grid.SelectedRows[0].Cells[0].Value), out int part)) return;
-        if (!_pngByPart.TryGetValue(part, out var files) || files.Count == 0) return;
+
+        _previewPart = part;
+        int originalCount = _originalFrames.TryGetValue(part, out var ofc) ? ofc : 0;
+        int newCount = _pngByPart.TryGetValue(part, out var files) ? files.Count : 0;
+        int max = Math.Max(0, Math.Max(originalCount, newCount) - 1);
+
+        _changingPreviewFrame = true;
+        _previewFrame.Maximum = max;
+        _previewFrame.Value = 0;
+        _changingPreviewFrame = false;
+
+        ShowSelectedPreview();
+    }
+
+    private void ShowSelectedPreview()
+    {
+        if (_previewPart < 0) return;
+
+        int frame = (int)_previewFrame.Value;
+        var target = _targets.FirstOrDefault(t => t.Part == _previewPart);
+        int originalCount = _originalFrames.TryGetValue(_previewPart, out var ofc) ? ofc : 0;
+        int newCount = _pngByPart.TryGetValue(_previewPart, out var files) ? files.Count : 0;
+
         try
         {
-            using var src = Image.FromFile(files[0]);
-            var copy = new Bitmap(src);
-            var old = _preview.Image;
-            _preview.Image = copy;
-            old?.Dispose();
+            if (target != null && frame < originalCount)
+            {
+                var stored = target.Pak.Extract(target.Entry);
+                var raw = SpriteCodec.DecodeIfNeeded(stored);
+                var bmp = SprDecoder.DecodeFrame(raw, frame);
+                var old = _originalPreview.Image;
+                _originalPreview.Image = bmp;
+                old?.Dispose();
+            }
+            else
+            {
+                var old = _originalPreview.Image;
+                _originalPreview.Image = null;
+                old?.Dispose();
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log($"[원본 미리보기 오류] {_previewPart}-{frame}: {ex.Message}");
+        }
+
+        try
+        {
+            if (files != null && frame < files.Count)
+            {
+                using var src = System.Drawing.Image.FromFile(files[frame]);
+                var copy = new Bitmap(src);
+                var old = _newPreview.Image;
+                _newPreview.Image = copy;
+                old?.Dispose();
+            }
+            else
+            {
+                var old = _newPreview.Image;
+                _newPreview.Image = null;
+                old?.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"[수정본 미리보기 오류] {_previewPart}-{frame}: {ex.Message}");
+        }
+
+        string fileName = target?.Entry.FileName ?? $"{(int)_gfx.Value}-{_previewPart}.spr";
+        _previewInfo.Text = $"  {fileName} · 프레임 {frame + 1} / 원본 {originalCount} · 수정 {newCount}";
     }
 
     private static string FindCaseInsensitive(string dir, string name)
