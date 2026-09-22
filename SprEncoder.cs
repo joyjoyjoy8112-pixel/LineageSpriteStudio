@@ -13,10 +13,10 @@ internal static class SprEncoder
         if (pngFiles.Count == 0) throw new ArgumentException("PNG 프레임이 없습니다.");
         if (pngFiles.Count > 254) throw new ArgumentException("한 SPR은 최대 254프레임까지만 지원합니다.");
 
-        var images = new List<Image<Rgba32>>(pngFiles.Count);
+        var images = new List<SixLabors.ImageSharp.Image<Rgba32>>(pngFiles.Count);
         try
         {
-            foreach (var f in pngFiles) images.Add(Image.Load<Rgba32>(f));
+            foreach (var f in pngFiles) images.Add(SixLabors.ImageSharp.Image.Load<Rgba32>(f));
             return Create(images);
         }
         finally
@@ -25,7 +25,7 @@ internal static class SprEncoder
         }
     }
 
-    private static byte[] Create(IReadOnlyList<Image<Rgba32>> images)
+    private static byte[] Create(IReadOnlyList<SixLabors.ImageSharp.Image<Rgba32>> images)
     {
         using var ms = new MemoryStream();
         using var bw = new BinaryWriter(ms);
@@ -69,7 +69,7 @@ internal static class SprEncoder
         return ms.ToArray();
     }
 
-    private static FrameInfo Analyze(Image<Rgba32> image, List<ushort[,]> allBlocks, Dictionary<string, int> map)
+    private static FrameInfo Analyze(SixLabors.ImageSharp.Image<Rgba32> image, List<ushort[,]> allBlocks, Dictionary<string, int> map)
     {
         int bx = (image.Width + BlockSize - 1) / BlockSize;
         int by = (image.Height + BlockSize - 1) / BlockSize;
@@ -105,7 +105,7 @@ internal static class SprEncoder
         return new FrameInfo(minX,minY,maxX,maxY,defs);
     }
 
-    private static ushort[,] Extract(Image<Rgba32> image,int sx,int sy)
+    private static ushort[,] Extract(SixLabors.ImageSharp.Image<Rgba32> image,int sx,int sy)
     {
         var p=new ushort[24,24];
         for(int y=0;y<24;y++)
