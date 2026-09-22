@@ -1,4 +1,4 @@
-name: Build V2.2.6 Windows x64
+name: Build V2.2.7 Windows x64
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
         shell: pwsh
         run: |
           @"
-          리니지 Sprite Studio V2.2.6
+          리니지 Sprite Studio V2.2.7
           - Sprite00~Sprite15 전체 자동 검색
           - GFX 동작 SPR 실제 PAK 자동 추적
           - 파일명 byte 합계 % 16 분배 검사
@@ -38,6 +38,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lineage_Sprite_Studio_V2.2.6_win-x64
+          name: Lineage_Sprite_Studio_V2.2.7_win-x64
           path: publish
           if-no-files-found: error
