@@ -185,3 +185,30 @@ internal sealed class SpritePak : IDisposable
 }
 
 internal sealed record SpriteTarget(int PakIndex, string IdxPath, SpritePak Pak, SpritePak.Entry Entry, int Part);
+
+internal static class SpriteCodec
+{
+    public static bool IsZlib(byte[] data)
+    {
+        if (data == null || data.Length < 2 || data[0] != 0x78) return false;
+        return data[1] == 0x9C || data[1] == 0xDA || data[1] == 0x01 || data[1] == 0x5E;
+    }
+
+    public static byte[] DecodeIfNeeded(byte[] data)
+    {
+        if (!IsZlib(data)) return data;
+        using var input = new MemoryStream(data);
+        using var z = new ZLibStream(input, CompressionMode.Decompress);
+        using var output = new MemoryStream();
+        z.CopyTo(output);
+        return output.ToArray();
+    }
+
+    public static byte[] EncodeZlib(byte[] data)
+    {
+        using var output = new MemoryStream();
+        using (var z = new ZLibStream(output, CompressionLevel.Optimal, leaveOpen: true))
+            z.Write(data, 0, data.Length);
+        return output.ToArray();
+    }
+}
