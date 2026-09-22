@@ -22,7 +22,7 @@ public sealed class MainForm : Form
 
     private readonly List<SpriteTarget> _targets = new();
     private readonly Dictionary<int, List<string>> _pngByPart = new();
-    private readonly Dictionary<int, int> _originalFrames = new();
+    private readonly Dictionary<int, int> _originalFrames = new();\n    private readonly Dictionary<int, bool> _originalZlib = new();
     private readonly List<SpritePak> _opened = new();
     private readonly Stopwatch _watch = new();
     private readonly System.Windows.Forms.Timer _elapsedTimer = new() { Interval = 250 };
@@ -175,7 +175,10 @@ public sealed class MainForm : Form
 
                 foreach (var t in _targets)
                 {
-                    var raw = t.Pak.Extract(t.Entry);
+                    var stored = t.Pak.Extract(t.Entry);
+                    bool zlib = SpriteCodec.IsZlib(stored);
+                    var raw = SpriteCodec.DecodeIfNeeded(stored);
+                    _originalZlib[t.Part] = zlib;
                     _originalFrames[t.Part] = SprInfo.FrameCount(raw);
                 }
             });
@@ -187,7 +190,7 @@ public sealed class MainForm : Form
             int totalFrames = _originalFrames.Values.Sum();
             int pngCount = _pngByPart.Values.Sum(x => x.Count);
             Log($"[검색] GFX {gfx}: {_targets.Count}개 동작 SPR 찾음");
-            Log($"[검색] 원본 프레임 합계: {totalFrames} / 새 PNG 인식: {pngCount}");
+            Log($"[검색] 원본 프레임 합계: {totalFrames} / 새 PNG 인식: {pngCount}");\n            Log($"[검색] ZLIB SPR: {_originalZlib.Values.Count(v => v)}개 / RAW SPR: {_originalZlib.Values.Count(v => !v)}개");
 
             var misplaced = _targets.Where(t => SpritePak.ExpectedPakIndex(t.Entry.FileName) != t.PakIndex).ToList();
             if (misplaced.Count == 0)
@@ -217,19 +220,48 @@ public sealed class MainForm : Form
         _pngByPart.Clear();
         if (!Directory.Exists(_png.Text)) return;
         int gfx = (int)_gfx.Value;
-        var rx = new Regex($"^{gfx}-(?<part>\\d+).*?frame[_-]?(?<frame>\\d+)\\.png$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var allPng = Directory.EnumerateFiles(_png.Text, "*.png", SearchOption.AllDirectories)
+            .OrderBy(x => x, NaturalPathComparer.Instance).ToList();
 
-        foreach (var f in Directory.EnumerateFiles(_png.Text, "*.png", SearchOption.TopDirectoryOnly))
+        var rx = new Regex($"^{gfx}-(?<part>\\d+).*?(?:frame|프레임)[ _-]?(?<frame>\\d+).*\\.png$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        int matched = 0;
+        foreach (var f in allPng)
         {
             var m = rx.Match(Path.GetFileName(f));
             if (!m.Success) continue;
             int part = int.Parse(m.Groups["part"].Value);
             if (!_pngByPart.TryGetValue(part, out var list)) _pngByPart[part] = list = new List<string>();
             list.Add(f);
+            matched++;
         }
 
         foreach (var pair in _pngByPart)
             pair.Value.Sort(NaturalPathComparer.Instance);
+
+        // 파일명이 다르더라도 총 프레임 수가 원본과 정확히 같으면
+        // 원본 동작별 프레임 수를 기준으로 자연 정렬 순서대로 자동 배분한다.
+        int originalTotal = _originalFrames.Values.Sum();
+        if (matched == 0 && allPng.Count > 0 && originalTotal > 0 && allPng.Count == originalTotal)
+        {
+            _pngByPart.Clear();
+            int cursor = 0;
+            foreach (var part in _originalFrames.Keys.OrderBy(x => x))
+            {
+                int count = _originalFrames[part];
+                _pngByPart[part] = allPng.Skip(cursor).Take(count).ToList();
+                cursor += count;
+            }
+            matched = allPng.Count;
+            Log($"[PNG] 파일명 패턴은 다르지만 총 {allPng.Count}장이 원본 {originalTotal}프레임과 일치하여 순차 자동 배분했습니다.");
+        }
+        else
+        {
+            Log($"[PNG] 선택 폴더(하위폴더 포함) PNG {allPng.Count}개 / 파일명 매칭 {matched}개");
+            if (allPng.Count > 0 && matched == 0)
+                Log($"[PNG] 첫 파일: {Path.GetFileName(allPng[0])}");
+        }
 
         RebuildGrid();
     }
@@ -305,8 +337,10 @@ public sealed class MainForm : Form
             {
                 var pngs = _pngByPart[t.Part];
                 SetProgress(8 + (int)(42.0 * done / total), $"SPR 생성 중... {done + 1}/{total} · {t.Entry.FileName}");
-                byte[] spr = await Task.Run(() => SprEncoder.CreateFromPngs(pngs));
-                generated[t.Entry.FileName] = spr;
+                byte[] rawSpr = await Task.Run(() => SprEncoder.CreateFromPngs(pngs));
+                bool useZlib = _originalZlib.TryGetValue(t.Part, out var z) && z;
+                byte[] storedSpr = useZlib ? await Task.Run(() => SpriteCodec.EncodeZlib(rawSpr)) : rawSpr;
+                generated[t.Entry.FileName] = storedSpr;
                 done++;
             }
 
