@@ -11,6 +11,7 @@ public sealed class MainForm : Form
     private readonly TextBox _png = new() { Dock = DockStyle.Fill };
     private readonly NumericUpDown _gfx = new() { Minimum = 0, Maximum = 999999, Value = 61, Width = 100 };
     private readonly Button _scan = new() { Text = "GFX 전체 검색", AutoSize = true };
+    private readonly Button _deepScan = new() { Text = "클라이언트 전체 IDX 검색", AutoSize = true };
     private readonly Button _apply = new() { Text = "백업 후 클라이언트에 적용", AutoSize = true, Enabled = false };
     private readonly DataGridView _grid = new()
     {
@@ -57,7 +58,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.6";
+        Text = "리니지 Sprite Studio V2.2.7";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -67,6 +68,7 @@ public sealed class MainForm : Form
         BuildUi();
         _elapsedTimer.Tick += (_, _) => _elapsed.Text = _watch.Elapsed.ToString(@"mm\:ss");
         _scan.Click += async (_, _) => await ScanAsync();
+        _deepScan.Click += async (_, _) => await DeepScanAllIdxAsync();
         _apply.Click += async (_, _) => await ApplyAsync();
         _grid.SelectionChanged += (_, _) => SelectPreviewFromGrid();
         _grid.CellClick += (_, e) =>
@@ -138,7 +140,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.6  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.2.7  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -164,6 +166,7 @@ public sealed class MainForm : Form
         settings.Controls.Add(browsePng, 2, 1);
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(10, 0, 0, 0) };
         buttons.Controls.Add(_scan);
+        buttons.Controls.Add(_deepScan);
         buttons.Controls.Add(_apply);
         buttons.Controls.Add(_backup);
         buttons.Controls.Add(new Label { Text = "방향 보정", AutoSize = true, Margin = new Padding(10, 6, 3, 0) });
@@ -372,6 +375,155 @@ public sealed class MainForm : Form
         }
     }
 
+    private async Task DeepScanAllIdxAsync()
+    {
+        if (!Directory.Exists(_client.Text))
+        {
+            MessageBox.Show(this, "클라이언트 폴더를 먼저 선택하세요.", "확인",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        SetBusy(true);
+        _watch.Restart();
+        _elapsedTimer.Start();
+
+        try
+        {
+            int gfx = (int)_gfx.Value;
+            SetProgress(1, "클라이언트 전체 IDX 검색 중...");
+
+            string root = Path.GetFullPath(_client.Text);
+            var idxFiles = Directory.EnumerateFiles(root, "*.idx", SearchOption.AllDirectories)
+                .Where(p => !p.Contains("SpriteStudio_Backup_", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            Log($"[전체IDX] 검색 시작: {root}");
+            Log($"[전체IDX] IDX 파일 {idxFiles.Count}개 발견");
+
+            var hits = new List<(string Dir, string Idx, int Count, List<int> Parts)>();
+            int done = 0;
+
+            await Task.Run(() =>
+            {
+                foreach (var idx in idxFiles)
+                {
+                    done++;
+                    ReportFromWorker(1 + (int)(88.0 * done / Math.Max(1, idxFiles.Count)),
+                        $"전체 IDX 검색 중... {done}/{idxFiles.Count}");
+
+                    try
+                    {
+                        string pak = Path.ChangeExtension(idx, ".pak");
+                        if (!File.Exists(pak)) continue;
+
+                        using var sp = new SpritePak(idx);
+                        var rx = new Regex($"^{gfx}-(\\d+)\\.spr$",
+                            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+                        var parts = new List<int>();
+                        foreach (var e in sp.Entries)
+                        {
+                            var m = rx.Match(e.FileName);
+                            if (m.Success && int.TryParse(m.Groups[1].Value, out int part))
+                                parts.Add(part);
+                        }
+
+                        if (parts.Count > 0)
+                        {
+                            lock (hits)
+                            {
+                                hits.Add((Path.GetDirectoryName(idx) ?? "", idx, parts.Count, parts));
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Not every IDX in the client is a supported _EXT sprite index.
+                    }
+                }
+            });
+
+            var groups = hits
+                .GroupBy(h => h.Dir, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new
+                {
+                    Dir = g.Key,
+                    IdxCount = g.Count(),
+                    EntryCount = g.Sum(x => x.Count),
+                    Parts = g.SelectMany(x => x.Parts).Distinct().OrderBy(x => x).ToList(),
+                    Files = g.Select(x => Path.GetFileName(x.Idx)).OrderBy(x => x).ToList()
+                })
+                .OrderByDescending(g => g.EntryCount)
+                .ThenBy(g => g.Dir, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (groups.Count == 0)
+            {
+                Log($"[전체IDX] GFX {gfx}의 SPR을 포함한 IDX/PAK 쌍을 찾지 못했습니다.");
+            }
+            else
+            {
+                foreach (var g in groups)
+                {
+                    string coverage = g.Parts.Count == 0 ? "-" :
+                        $"{g.Parts.First()}~{g.Parts.Last()} / 고유 {g.Parts.Count}개";
+                    Log($"[전체IDX] 폴더: {g.Dir}");
+                    Log($"[전체IDX]   GFX {gfx}: SPR {g.EntryCount}개 / 고유동작 {g.Parts.Count}개 / IDX {g.IdxCount}개 / 범위 {coverage}");
+                    Log($"[전체IDX]   IDX: {string.Join(", ", g.Files.Take(20))}{(g.Files.Count > 20 ? " ..." : "")}");
+                }
+            }
+
+            string mjlin = Path.Combine(root, "mjlin.bin");
+            string jungden = Path.Combine(root, "jungden.DLL");
+            if (!File.Exists(jungden))
+            {
+                string alt = Directory.EnumerateFiles(root, "jungden*.DLL", SearchOption.TopDirectoryOnly).FirstOrDefault() ?? "";
+                if (!string.IsNullOrEmpty(alt)) jungden = alt;
+            }
+
+            Log($"[실행경로] Sprite Studio 선택 폴더: {root}");
+            if (File.Exists(mjlin))
+                Log($"[실행경로] mjlin.bin: {mjlin} / SHA256 {Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(mjlin))).Substring(0, 16)}...");
+            else
+                Log("[실행경로] mjlin.bin 없음");
+
+            if (File.Exists(jungden))
+                Log($"[실행경로] jungden.DLL: {jungden} / SHA256 {Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(jungden))).Substring(0, 16)}...");
+            else
+                Log("[실행경로] jungden.DLL 없음");
+
+            SetProgress(100, $"전체 IDX 검색 완료 · 후보 폴더 {groups.Count}개");
+
+            if (groups.Count > 1)
+            {
+                MessageBox.Show(this,
+                    $"GFX {gfx}가 들어 있는 리소스 폴더를 {groups.Count}곳 찾았습니다.\n\n로그의 [전체IDX] 항목을 확인하세요.\n게임이 다른 폴더의 Sprite를 읽고 있을 가능성이 있습니다.",
+                    "중복 Sprite 후보 발견", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else
+            {
+                MessageBox.Show(this,
+                    $"전체 클라이언트에서 GFX {gfx}가 들어 있는 IDX/PAK 폴더를 {groups.Count}곳 찾았습니다.\n\n로그의 [전체IDX]와 [실행경로]를 확인해 주세요.",
+                    "전체 IDX 검색 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetProgress(0, "전체 IDX 검색 실패");
+            Log("[전체IDX 오류] " + ex);
+            MessageBox.Show(this, ex.Message, "전체 IDX 검색 오류",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _watch.Stop();
+            _elapsedTimer.Stop();
+            SetBusy(false);
+        }
+    }
+
     private void LoadPngMap()
     {
         _pngByPart.Clear();
@@ -570,7 +722,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2.6 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.2.7 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -944,6 +1096,7 @@ public sealed class MainForm : Form
     {
         if (InvokeRequired) { BeginInvoke(() => SetBusy(busy)); return; }
         _scan.Enabled = !busy;
+        _deepScan.Enabled = !busy;
         _apply.Enabled = !busy && _targets.Count > 0 && _pngByPart.Count > 0;
         _client.Enabled = !busy;
         _png.Enabled = !busy;
