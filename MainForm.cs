@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -12,6 +13,7 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _gfx = new() { Minimum = 0, Maximum = 999999, Value = 61, Width = 100 };
     private readonly Button _scan = new() { Text = "GFX 전체 검색", AutoSize = true };
     private readonly Button _deepScan = new() { Text = "클라이언트 전체 IDX 검색", AutoSize = true };
+    private readonly Button _traceMap = new() { Text = "GFX 실제 매핑 추적", AutoSize = true };
     private readonly Button _apply = new() { Text = "백업 후 클라이언트에 적용", AutoSize = true, Enabled = false };
     private readonly DataGridView _grid = new()
     {
@@ -58,7 +60,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.7";
+        Text = "리니지 Sprite Studio V2.2.8";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -69,6 +71,7 @@ public sealed class MainForm : Form
         _elapsedTimer.Tick += (_, _) => _elapsed.Text = _watch.Elapsed.ToString(@"mm\:ss");
         _scan.Click += async (_, _) => await ScanAsync();
         _deepScan.Click += async (_, _) => await DeepScanAllIdxAsync();
+        _traceMap.Click += async (_, _) => await TraceGfxMappingAsync();
         _apply.Click += async (_, _) => await ApplyAsync();
         _grid.SelectionChanged += (_, _) => SelectPreviewFromGrid();
         _grid.CellClick += (_, e) =>
@@ -140,7 +143,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.7  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.2.8  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -167,6 +170,7 @@ public sealed class MainForm : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(10, 0, 0, 0) };
         buttons.Controls.Add(_scan);
         buttons.Controls.Add(_deepScan);
+        buttons.Controls.Add(_traceMap);
         buttons.Controls.Add(_apply);
         buttons.Controls.Add(_backup);
         buttons.Controls.Add(new Label { Text = "방향 보정", AutoSize = true, Margin = new Padding(10, 6, 3, 0) });
@@ -524,6 +528,233 @@ public sealed class MainForm : Form
         }
     }
 
+    private async Task TraceGfxMappingAsync()
+    {
+        if (!Directory.Exists(_client.Text))
+        {
+            MessageBox.Show(this, "클라이언트 폴더를 먼저 선택하세요.", "확인",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        SetBusy(true);
+        _watch.Restart();
+        _elapsedTimer.Start();
+
+        try
+        {
+            int gfx = (int)_gfx.Value;
+            string root = Path.GetFullPath(_client.Text);
+            SetProgress(1, "list.spr / wlist.spr 검색 중...");
+            Log($"[실제매핑] GFX {gfx} 추적 시작");
+
+            var candidates = new List<(string Source, byte[] Data)>();
+
+            foreach (var name in new[] { "list.spr", "wlist.spr" })
+            {
+                try
+                {
+                    foreach (var p in Directory.EnumerateFiles(root, name, SearchOption.AllDirectories)
+                        .Where(p => !p.Contains("SpriteStudio_Backup_", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        candidates.Add(($"파일: {p}", File.ReadAllBytes(p)));
+                    }
+                }
+                catch { }
+            }
+
+            var idxFiles = Directory.EnumerateFiles(root, "*.idx", SearchOption.AllDirectories)
+                .Where(p => !p.Contains("SpriteStudio_Backup_", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            int done = 0;
+            foreach (var idx in idxFiles)
+            {
+                done++;
+                SetProgress(5 + (int)(45.0 * done / Math.Max(1, idxFiles.Count)),
+                    $"매핑 테이블 검색 중... {done}/{idxFiles.Count}");
+
+                try
+                {
+                    if (!File.Exists(Path.ChangeExtension(idx, ".pak"))) continue;
+                    using var pak = new SpritePak(idx);
+                    foreach (var e in pak.Entries)
+                    {
+                        string fn = Path.GetFileName(e.FileName);
+                        if (!fn.Equals("list.spr", StringComparison.OrdinalIgnoreCase) &&
+                            !fn.Equals("wlist.spr", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        candidates.Add(($"PAK: {idx} -> {e.FileName}", pak.Extract(e)));
+                    }
+                }
+                catch
+                {
+                    // 다른 IDX 형식은 건너뜀
+                }
+            }
+
+            candidates = candidates
+                .GroupBy(x => x.Source, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                Log("[실제매핑] list.spr / wlist.spr을 찾지 못했습니다.");
+                MessageBox.Show(this,
+                    "클라이언트와 지원되는 IDX/PAK 안에서 list.spr / wlist.spr을 찾지 못했습니다.\n로그를 보내주세요.",
+                    "GFX 실제 매핑", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                SetProgress(100, "매핑 테이블 없음");
+                return;
+            }
+
+            Log($"[실제매핑] list.spr/wlist.spr 후보 {candidates.Count}개 발견");
+
+            var archiveEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                for (int n = 0; n < 16; n++)
+                {
+                    string idx = FindCaseInsensitive(root, $"Sprite{n:00}.idx");
+                    if (string.IsNullOrEmpty(idx)) continue;
+                    using var p = new SpritePak(idx);
+                    foreach (var e in p.Entries) archiveEntries.Add(e.FileName);
+                }
+            }
+            catch { }
+
+            int foundEntries = 0;
+            foreach (var candidate in candidates)
+            {
+                byte[] data = candidate.Data;
+                if (SpriteCodec.IsZlib(data))
+                {
+                    try { data = SpriteCodec.DecodeIfNeeded(data); } catch { }
+                }
+
+                string textContent;
+                try
+                {
+                    textContent = new UTF8Encoding(false, true).GetString(data);
+                }
+                catch
+                {
+                    textContent = Encoding.Default.GetString(data);
+                }
+
+                var lines = textContent.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+                int start = -1;
+                Match? headerMatch = null;
+                var headerRx = new Regex(@"^\s*#(?<id>\d+)\s+(?<count>\d+)(?:=(?<linked>\d+))?(?:\s+(?<name>.*))?$",
+                    RegexOptions.CultureInvariant);
+
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var m = headerRx.Match(lines[i]);
+                    if (!m.Success) continue;
+                    if (int.Parse(m.Groups["id"].Value) != gfx) continue;
+                    start = i;
+                    headerMatch = m;
+                    break;
+                }
+
+                if (start < 0 || headerMatch == null)
+                {
+                    Log($"[실제매핑] {candidate.Source}: #{gfx} 항목 없음");
+                    continue;
+                }
+
+                foundEntries++;
+                int imageCount = int.Parse(headerMatch.Groups["count"].Value);
+                int spriteId = headerMatch.Groups["linked"].Success
+                    ? int.Parse(headerMatch.Groups["linked"].Value)
+                    : gfx;
+                string entryName = headerMatch.Groups["name"].Value.Trim();
+
+                var block = new StringBuilder();
+                block.AppendLine(lines[start]);
+                for (int i = start + 1; i < lines.Length; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("#")) break;
+                    block.AppendLine(lines[i]);
+                }
+
+                var actionRx = new Regex(@"(?<aid>-?\d+)\.(?<name>[a-zA-Z_][a-zA-Z0-9_\s-]*)?\((?<dir>-?\d+)\s+(?<fc>-?\d+),(?<frames>[^)]*)\)",
+                    RegexOptions.CultureInvariant);
+                var frameRx = new Regex(@"(?<img>-?\d+)\.(?<frame>-?\d+):(?<dur>-?\d+)",
+                    RegexOptions.CultureInvariant);
+
+                var actions = actionRx.Matches(block.ToString()).Cast<Match>().ToList();
+                var actualSubIds = new HashSet<int>();
+                var imageIds = new HashSet<int>();
+
+                foreach (var action in actions)
+                {
+                    int directional = int.Parse(action.Groups["dir"].Value);
+                    string framesText = action.Groups["frames"].Value;
+                    foreach (Match fm in frameRx.Matches(framesText))
+                    {
+                        int imageId = int.Parse(fm.Groups["img"].Value);
+                        if (imageId < 0) continue;
+                        imageIds.Add(imageId);
+                        if (directional == 1)
+                        {
+                            for (int d = 0; d < 8; d++) actualSubIds.Add(imageId + d);
+                        }
+                        else
+                        {
+                            actualSubIds.Add(imageId);
+                        }
+                    }
+                }
+
+                var actualFiles = actualSubIds
+                    .OrderBy(x => x)
+                    .Select(x => $"{spriteId}-{x}.spr")
+                    .ToList();
+                int existing = actualFiles.Count(f => archiveEntries.Contains(f));
+
+                Log($"[실제매핑] 소스: {candidate.Source}");
+                Log($"[실제매핑] #{gfx}: SpriteId={spriteId} / ImageCount={imageCount} / 이름={entryName}");
+                Log($"[실제매핑] 동작 {actions.Count}개 / ImageId {imageIds.Count}종 / 실제 SPR 후보 {actualFiles.Count}개 / 아카이브 존재 {existing}개");
+                if (actualFiles.Count > 0)
+                {
+                    Log($"[실제매핑] 실제 파일 예: {string.Join(", ", actualFiles.Take(16))}{(actualFiles.Count > 16 ? " ..." : "")}");
+                }
+
+                if (spriteId != gfx)
+                {
+                    Log($"[핵심] 서버 GFX {gfx}는 파일 {gfx}-*.spr이 아니라 SpriteId {spriteId}-*.spr을 사용합니다.");
+                    Log($"[핵심] 지금까지 {gfx}-*.spr을 바꿨다면 게임 화면이 그대로였던 이유와 일치합니다.");
+                }
+                else
+                {
+                    Log($"[실제매핑] SpriteId가 GFX와 동일합니다. 다음으로 list.spr의 ImageId/동작 매핑과 적용 포맷을 확인해야 합니다.");
+                }
+            }
+
+            SetProgress(100, $"GFX 매핑 추적 완료 · #{gfx} 항목 {foundEntries}개");
+
+            MessageBox.Show(this,
+                $"GFX {gfx} 실제 매핑 추적 완료\n\nlist/wlist 후보: {candidates.Count}개\n#{gfx} 항목 발견: {foundEntries}개\n\n로그의 [실제매핑]과 [핵심] 줄을 보내주세요.",
+                "GFX 실제 매핑", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            SetProgress(0, "GFX 매핑 추적 실패");
+            Log("[실제매핑 오류] " + ex);
+            MessageBox.Show(this, ex.Message, "GFX 실제 매핑 오류",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _watch.Stop();
+            _elapsedTimer.Stop();
+            SetBusy(false);
+        }
+    }
+
     private void LoadPngMap()
     {
         _pngByPart.Clear();
@@ -722,7 +953,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2.7 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.2.8 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -1097,6 +1328,7 @@ public sealed class MainForm : Form
         if (InvokeRequired) { BeginInvoke(() => SetBusy(busy)); return; }
         _scan.Enabled = !busy;
         _deepScan.Enabled = !busy;
+        _traceMap.Enabled = !busy;
         _apply.Enabled = !busy && _targets.Count > 0 && _pngByPart.Count > 0;
         _client.Enabled = !busy;
         _png.Enabled = !busy;
