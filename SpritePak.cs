@@ -25,7 +25,13 @@ internal sealed class SpritePak : IDisposable
     {
         var data = File.ReadAllBytes(IdxPath);
         if (data.Length < 8 || data[0] != '_' || data[1] != 'E' || data[2] != 'X' || data[3] != 'T')
-            throw new InvalidDataException($"지원하지 않는 IDX 형식: {Path.GetFileName(IdxPath)}");
+        {
+            string hex = Convert.ToHexString(data.Take(Math.Min(16, data.Length)).ToArray());
+            string ascii = new string(data.Take(Math.Min(16, data.Length))
+                .Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
+            throw new InvalidDataException(
+                $"지원하지 않는 IDX 형식: {Path.GetFileName(IdxPath)} / 크기 {data.Length:N0} / HEAD {hex} / ASCII {ascii}");
+        }
 
         int count = BitConverter.ToInt32(data, 4);
         if (count < 0 || data.Length < 8L + count * 128L)
