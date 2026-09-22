@@ -36,7 +36,13 @@ public sealed class MainForm : Form
     private readonly Button _autoPlayButton = new() { Text = "▶ 자동재생", AutoSize = true };
     private readonly ComboBox _playSpeed = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 86 };
     private readonly ComboBox _directionMap = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 145 };
+    private readonly NumericUpDown _groupOffset = new() { Minimum = -20, Maximum = 20, Value = 0, Width = 62 };
+    private readonly NumericUpDown _sourceGroup = new() { Minimum = 0, Maximum = 20, Value = 0, Width = 62 };
+    private readonly Button _autoMap = new() { Text = "프레임수 자동 맞춤", AutoSize = true };
+    private readonly Button _mapSelectedGroup = new() { Text = "선택 그룹 연결", AutoSize = true };
+    private readonly Button _clearSelectedGroupMap = new() { Text = "선택 그룹 연결 해제", AutoSize = true };
     private readonly System.Windows.Forms.Timer _autoPlayTimer = new() { Interval = 180 };
+    private readonly Dictionary<int, int> _groupMapOverrides = new();
     private int _previewPart = -1;
     private bool _changingPreviewFrame;
 
@@ -50,7 +56,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.4";
+        Text = "리니지 Sprite Studio V2.2.5";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -97,6 +103,16 @@ public sealed class MainForm : Form
             SelectPreviewFromGrid();
         };
 
+        _groupOffset.ValueChanged += (_, _) =>
+        {
+            RebuildGrid();
+            SelectPreviewFromGrid();
+        };
+
+        _autoMap.Click += (_, _) => AutoFindFrameMapping();
+        _mapSelectedGroup.Click += (_, _) => MapSelectedGroup();
+        _clearSelectedGroupMap.Click += (_, _) => ClearSelectedGroupMap();
+
         _autoPlayButton.Click += (_, _) => ToggleAutoPlay();
         _autoPlayTimer.Tick += (_, _) => AdvanceAutoPlay();
 
@@ -121,7 +137,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.4  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.2.5  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -154,6 +170,24 @@ public sealed class MainForm : Form
         settings.Controls.Add(buttons, 3, 1);
         settings.SetColumnSpan(buttons, 2);
 
+        var mappingBar = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 6, 0, 0)
+        };
+        mappingBar.Controls.Add(new Label { Text = "동작 그룹 오프셋", AutoSize = true, Margin = new Padding(0, 6, 4, 0) });
+        mappingBar.Controls.Add(_groupOffset);
+        mappingBar.Controls.Add(_autoMap);
+        mappingBar.Controls.Add(new Label { Text = "선택 그룹 → 수정 그룹", AutoSize = true, Margin = new Padding(12, 6, 4, 0) });
+        mappingBar.Controls.Add(_sourceGroup);
+        mappingBar.Controls.Add(_mapSelectedGroup);
+        mappingBar.Controls.Add(_clearSelectedGroupMap);
+        settings.Controls.Add(mappingBar, 0, 2);
+        settings.SetColumnSpan(mappingBar, 5);
+
         browseClient.Click += (_, _) =>
         {
             using var f = new FolderBrowserDialog { Description = "리니지 클라이언트 폴더를 선택하세요." };
@@ -176,6 +210,7 @@ public sealed class MainForm : Form
         _grid.Columns.Add("Pak", "실제 PAK");
         _grid.Columns.Add("Frames", "원본 프레임");
         _grid.Columns.Add("Png", "새 PNG");
+        _grid.Columns.Add("Map", "수정 매핑");
         _grid.Columns.Add("Hash", "분배 검사");
         root.Controls.Add(_grid, 0, 2);
 
@@ -261,6 +296,8 @@ public sealed class MainForm : Form
             _targets.Clear();
             _originalFrames.Clear();
             _originalZlib.Clear();
+            _groupMapOverrides.Clear();
+            _groupOffset.Value = 0;
             foreach (var p in _opened) p.Dispose();
             _opened.Clear();
 
@@ -391,10 +428,12 @@ public sealed class MainForm : Form
         foreach (var t in _targets)
         {
             int frames = _originalFrames.TryGetValue(t.Part, out var fc) ? fc : 0;
+            int sourcePart = GetMappedSourcePart(t.Part);
             int png = GetMappedPngFiles(t.Part)?.Count ?? 0;
             int expected = SpritePak.ExpectedPakIndex(t.Entry.FileName);
             string dist = expected == t.PakIndex ? "OK" : $"예상 {expected:00}";
-            int row = _grid.Rows.Add(t.Part, t.Entry.FileName, $"Sprite{t.PakIndex:00}.pak", frames, png, dist);
+            string mapText = sourcePart >= 0 ? $"{(int)_gfx.Value}-{sourcePart}.spr" : "없음";
+            int row = _grid.Rows.Add(t.Part, t.Entry.FileName, $"Sprite{t.PakIndex:00}.pak", frames, png, mapText, dist);
             if (png != frames) _grid.Rows[row].DefaultCellStyle.BackColor = Color.MistyRose;
         }
     }
@@ -412,7 +451,28 @@ public sealed class MainForm : Form
         }).ToList();
         if (missing.Count > 0 || mismatch.Count > 0)
         {
-            string msg = $"적용을 중단했습니다.\n\nPNG가 없는 동작: {missing.Count}개\n원본 프레임 수와 다른 동작: {mismatch.Count}개\n\n전체 168개 동작을 정확히 대응시킨 뒤 적용해야 게임에서 원본이 남지 않습니다.";
+            var details = mismatch.Take(12).Select(t =>
+            {
+                int original = _originalFrames.TryGetValue(t.Part, out var f) ? f : 0;
+                int sourcePart = GetMappedSourcePart(t.Part);
+                int png = GetMappedPngFiles(t.Part)?.Count ?? 0;
+                return $"{t.Entry.FileName} ← {(int)_gfx.Value}-{sourcePart}.spr : 원본 {original} / 수정 {png}";
+            }).ToList();
+
+            foreach (var t in missing)
+                Log($"[매핑 누락] {t.Entry.FileName}");
+            foreach (var t in mismatch)
+            {
+                int original = _originalFrames.TryGetValue(t.Part, out var f) ? f : 0;
+                int sourcePart = GetMappedSourcePart(t.Part);
+                int png = GetMappedPngFiles(t.Part)?.Count ?? 0;
+                Log($"[프레임 불일치] {t.Entry.FileName} ← {(int)_gfx.Value}-{sourcePart}.spr : 원본 {original} / 수정 {png}");
+            }
+
+            string more = mismatch.Count > details.Count ? $"\n외 {mismatch.Count - details.Count}개" : "";
+            string msg = $"적용을 중단했습니다.\n\nPNG가 없는 동작: {missing.Count}개\n원본 프레임 수와 다른 동작: {mismatch.Count}개\n\n"
+                       + (details.Count > 0 ? string.Join("\n", details) + more : "")
+                       + "\n\n매핑을 맞춘 뒤 다시 적용하세요.";
             MessageBox.Show(this, msg, "프레임 대응 확인", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             Log($"[중단] 누락={missing.Count}, 프레임수 불일치={mismatch.Count}");
             return;
@@ -508,7 +568,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2.4 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.2.5 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -582,6 +642,9 @@ public sealed class MainForm : Form
         if (!int.TryParse(Convert.ToString(_grid.SelectedRows[0].Cells[0].Value), out int part)) return;
 
         _previewPart = part;
+        int mappedPart = GetMappedSourcePart(part);
+        if (mappedPart >= 0)
+            _sourceGroup.Value = Math.Clamp(mappedPart / 8, (int)_sourceGroup.Minimum, (int)_sourceGroup.Maximum);
         int originalCount = _originalFrames.TryGetValue(part, out var ofc) ? ofc : 0;
         int newCount = GetMappedPngFiles(part)?.Count ?? 0;
         int max = Math.Max(0, Math.Max(originalCount, newCount) - 1);
@@ -651,31 +714,154 @@ public sealed class MainForm : Form
 
         string fileName = target?.Entry.FileName ?? $"{(int)_gfx.Value}-{_previewPart}.spr";
         string directionText = _directionMap.SelectedItem?.ToString() ?? "방향 그대로";
-        _previewInfo.Text = $"  {fileName} · 프레임 {frame + 1} / 원본 {originalCount} · 수정 {newCount} · {directionText}";
+        int mappedPart = GetMappedSourcePart(_previewPart);
+        string overrideText = _groupMapOverrides.ContainsKey(_previewPart / 8) ? " · 수동그룹" : "";
+        _previewInfo.Text = $"  {fileName} ← {(int)_gfx.Value}-{mappedPart}.spr · 프레임 {frame + 1} / 원본 {originalCount} · 수정 {newCount} · {directionText}{overrideText}";
+    }
+
+    private int GroupCount
+    {
+        get
+        {
+            int maxPart = Math.Max(
+                _targets.Count == 0 ? 0 : _targets.Max(t => t.Part),
+                _pngByPart.Count == 0 ? 0 : _pngByPart.Keys.Max());
+            return Math.Max(1, maxPart / 8 + 1);
+        }
+    }
+
+    private int GetMappedSourcePart(int targetPart)
+    {
+        if (_pngByPart.Count == 0) return -1;
+
+        int groupCount = GroupCount;
+        int targetGroup = targetPart / 8;
+        int dir = targetPart % 8;
+
+        int sourceGroup;
+        if (_groupMapOverrides.TryGetValue(targetGroup, out int manualGroup))
+            sourceGroup = Mod(manualGroup, groupCount);
+        else
+            sourceGroup = Mod(targetGroup + (int)_groupOffset.Value, groupCount);
+
+        int sourceDir = dir;
+        if (_directionMap.SelectedIndex == 1)
+            sourceDir = (8 - dir) % 8;
+        else if (_directionMap.SelectedIndex >= 2)
+            sourceDir = (dir + (_directionMap.SelectedIndex - 1)) % 8;
+
+        return sourceGroup * 8 + sourceDir;
     }
 
     private List<string>? GetMappedPngFiles(int targetPart)
     {
-        if (_pngByPart.Count == 0) return null;
+        int sourcePart = GetMappedSourcePart(targetPart);
+        return sourcePart >= 0 && _pngByPart.TryGetValue(sourcePart, out var files) ? files : null;
+    }
 
-        // 168 SPR = 21개 동작 × 8방향 구조를 기준으로 방향 그룹 안에서만 재매핑한다.
-        int groupStart = (targetPart / 8) * 8;
-        int dir = targetPart % 8;
-        int sourceDir = dir;
+    private static int Mod(int value, int mod)
+    {
+        int r = value % mod;
+        return r < 0 ? r + mod : r;
+    }
 
-        if (_directionMap.SelectedIndex == 1)
+    private void AutoFindFrameMapping()
+    {
+        if (_targets.Count == 0 || _pngByPart.Count == 0)
         {
-            // 시계/반시계 순서가 반대인 세트: 0은 유지하고 1↔7, 2↔6, 3↔5.
-            sourceDir = (8 - dir) % 8;
-        }
-        else if (_directionMap.SelectedIndex >= 2)
-        {
-            int offset = _directionMap.SelectedIndex - 1; // +1 ... +7
-            sourceDir = (dir + offset) % 8;
+            MessageBox.Show(this, "먼저 GFX 검색과 PNG 폴더 선택을 완료하세요.", "자동 맞춤",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
         }
 
-        int sourcePart = groupStart + sourceDir;
-        return _pngByPart.TryGetValue(sourcePart, out var files) ? files : null;
+        int oldDirection = _directionMap.SelectedIndex;
+        decimal oldOffset = _groupOffset.Value;
+        _groupMapOverrides.Clear();
+
+        int bestDirection = 0;
+        int bestOffset = 0;
+        int bestMismatch = int.MaxValue;
+        int bestMissing = int.MaxValue;
+
+        int groupCount = GroupCount;
+        for (int direction = 0; direction < _directionMap.Items.Count; direction++)
+        {
+            _directionMap.SelectedIndex = direction;
+            for (int offset = 0; offset < groupCount; offset++)
+            {
+                _groupOffset.Value = Math.Clamp(offset, (int)_groupOffset.Minimum, (int)_groupOffset.Maximum);
+
+                int mismatch = 0;
+                int missing = 0;
+                foreach (var t in _targets)
+                {
+                    int original = _originalFrames.TryGetValue(t.Part, out var f) ? f : 0;
+                    var files = GetMappedPngFiles(t.Part);
+                    if (files == null || files.Count == 0) { missing++; continue; }
+                    if (files.Count != original) mismatch++;
+                }
+
+                if (missing < bestMissing || (missing == bestMissing && mismatch < bestMismatch))
+                {
+                    bestMissing = missing;
+                    bestMismatch = mismatch;
+                    bestDirection = direction;
+                    bestOffset = offset;
+                }
+            }
+        }
+
+        _directionMap.SelectedIndex = bestDirection;
+        _groupOffset.Value = bestOffset;
+        RebuildGrid();
+        SelectPreviewFromGrid();
+
+        Log($"[자동 맞춤] 방향={_directionMap.SelectedItem}, 그룹 오프셋={bestOffset}, 누락={bestMissing}, 프레임 불일치={bestMismatch}");
+        MessageBox.Show(this,
+            $"프레임 수 기준 자동 맞춤 결과\n\n방향: {_directionMap.SelectedItem}\n동작 그룹 오프셋: {bestOffset}\nPNG 누락: {bestMissing}\n프레임 불일치: {bestMismatch}\n\n"
+            + "이 기능은 프레임 수만 비교합니다. 맨손/검/활 같은 실제 동작 내용은 오른쪽 미리보기로 확인하고 필요하면 선택 그룹 연결을 사용하세요.",
+            "자동 맞춤 결과", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void MapSelectedGroup()
+    {
+        if (_previewPart < 0)
+        {
+            MessageBox.Show(this, "표에서 먼저 원본 SPR 행을 선택하세요.", "그룹 연결",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        int targetGroup = _previewPart / 8;
+        int sourceGroup = (int)_sourceGroup.Value;
+        _groupMapOverrides[targetGroup] = sourceGroup;
+        Log($"[그룹 연결] 원본 그룹 {targetGroup} ({(int)_gfx.Value}-{targetGroup * 8}~{(int)_gfx.Value}-{targetGroup * 8 + 7})"
+            + $" ← 수정 그룹 {sourceGroup} ({(int)_gfx.Value}-{sourceGroup * 8}~{(int)_gfx.Value}-{sourceGroup * 8 + 7})");
+        RebuildGrid();
+        ReselectPart(_previewPart);
+    }
+
+    private void ClearSelectedGroupMap()
+    {
+        if (_previewPart < 0) return;
+        int targetGroup = _previewPart / 8;
+        if (_groupMapOverrides.Remove(targetGroup))
+            Log($"[그룹 연결 해제] 원본 그룹 {targetGroup}");
+        RebuildGrid();
+        ReselectPart(_previewPart);
+    }
+
+    private void ReselectPart(int part)
+    {
+        foreach (DataGridViewRow row in _grid.Rows)
+        {
+            if (Convert.ToInt32(row.Cells[0].Value) != part) continue;
+            _grid.ClearSelection();
+            row.Selected = true;
+            _grid.CurrentCell = row.Cells[0];
+            break;
+        }
+        SelectPreviewFromGrid();
     }
 
     private void ToggleAutoPlay()
@@ -729,6 +915,12 @@ public sealed class MainForm : Form
         _client.Enabled = !busy;
         _png.Enabled = !busy;
         _gfx.Enabled = !busy;
+        _directionMap.Enabled = !busy;
+        _groupOffset.Enabled = !busy;
+        _sourceGroup.Enabled = !busy;
+        _autoMap.Enabled = !busy;
+        _mapSelectedGroup.Enabled = !busy;
+        _clearSelectedGroupMap.Enabled = !busy;
         UseWaitCursor = busy;
     }
 
