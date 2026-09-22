@@ -60,7 +60,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.2.9";
+        Text = "리니지 Sprite Studio V2.3.0";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -143,7 +143,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.2.9  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.3.0  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -333,7 +333,9 @@ public sealed class MainForm : Form
                     }
                     catch (Exception ex)
                     {
-                        BeginInvoke(() => Log($"[IDX 건너뜀] Sprite{n:00}.idx: {ex.Message}"));
+                        int pakNo = n;
+                        string idxName = Path.GetFileName(idx);
+                        BeginInvoke(() => Log($"[IDX 건너뜀] Sprite{pakNo:00} / {idxName}: {ex.Message}"));
                     }
 
                     ReportFromWorker(3 + n * 3, $"Sprite{n:00}.idx 분석 중...");
@@ -966,7 +968,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.2.9 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.3.0 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
