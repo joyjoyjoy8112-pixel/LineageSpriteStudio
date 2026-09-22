@@ -1,0 +1,43 @@
+name: Build V2.2 Windows x64
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish win-x64
+        run: dotnet publish LineageSpriteStudio.csproj -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Add release notes
+        shell: pwsh
+        run: |
+          @"
+          리니지 Sprite Studio V2.2
+          - Sprite00~Sprite15 전체 자동 검색
+          - GFX 동작 SPR 실제 PAK 자동 추적
+          - 파일명 byte 합계 % 16 분배 검사
+          - PNG -> SPR 변환
+          - append 방식 PAK 패치 + IDX 갱신
+          - 적용 후 SHA-256 재추출 검증
+          - 실패 시 자동 롤백
+          - 0~100% 애니메이션 진행 바
+          "@ | Set-Content -Encoding UTF8 publish\README_사용법.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lineage_Sprite_Studio_V2.2_win-x64
+          path: publish
+          if-no-files-found: error
