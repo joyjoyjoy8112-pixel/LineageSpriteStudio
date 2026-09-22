@@ -176,5 +176,28 @@ internal static class SprEncoder
 
 internal static class SprInfo
 {
-    public static int FrameCount(byte[] spr) => spr.Length == 0 ? 0 : spr[0];
+    public static int FrameCount(byte[] spr)
+    {
+        if (spr == null || spr.Length == 0) return 0;
+
+        int pos = 0;
+        int first = spr[pos++];
+
+        // Lineage SPR palette format:
+        // 0xFF, paletteSize(0 means 256), palette entries (ushort each), frameCount
+        if (first == 255)
+        {
+            if (pos >= spr.Length) return 0;
+            int paletteSize = spr[pos++];
+            if (paletteSize == 0) paletteSize = 256;
+
+            int paletteBytes = paletteSize * 2;
+            if (pos + paletteBytes >= spr.Length) return 0;
+            pos += paletteBytes;
+
+            return spr[pos];
+        }
+
+        return first;
+    }
 }
