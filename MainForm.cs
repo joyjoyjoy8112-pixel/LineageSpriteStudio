@@ -104,6 +104,7 @@ public sealed class MainForm : Form
             {
                 _png.Text = f.SelectedPath;
                 LoadPngMap();
+                ShowFirstPngPreview();
             }
         };
         root.Controls.Add(settings, 0, 1);
@@ -424,6 +425,33 @@ public sealed class MainForm : Form
             _watch.Stop();
             _elapsedTimer.Stop();
             SetBusy(false);
+        }
+    }
+
+    private void ShowFirstPngPreview()
+    {
+        if (!Directory.Exists(_png.Text)) return;
+        try
+        {
+            var first = Directory.EnumerateFiles(_png.Text, "*.png", SearchOption.AllDirectories)
+                .OrderBy(x => x, NaturalPathComparer.Instance)
+                .FirstOrDefault();
+            if (first == null)
+            {
+                Log("[PNG] 선택한 폴더와 하위폴더에서 PNG 파일을 찾지 못했습니다.");
+                return;
+            }
+
+            using var src = System.Drawing.Image.FromFile(first);
+            var copy = new Bitmap(src);
+            var old = _preview.Image;
+            _preview.Image = copy;
+            old?.Dispose();
+            Log($"[미리보기] {Path.GetFileName(first)}");
+        }
+        catch (Exception ex)
+        {
+            Log("[미리보기 오류] " + ex.Message);
         }
     }
 
