@@ -170,6 +170,78 @@ internal sealed class SpritePak : IDisposable
         return raw;
     }
 
+    public void RebuildLegacyPak(IReadOnlyDictionary<string, byte[]> replacements)
+    {
+        if (!IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || IsDesEncrypted)
+            throw new InvalidOperationException("안전 재묶기는 비암호화 LEGACY28 Sprite PAK에서만 사용할 수 있습니다.");
+
+        string tmpPak = PakPath + ".sprite-studio-repack.tmp";
+        if (File.Exists(tmpPak)) File.Delete(tmpPak);
+
+        // 원본 offset/size를 먼저 고정해 둔다. Entries는 새 PAK 위치로 갱신된다.
+        var originals = Entries
+            .Select(e => new
+            {
+                Entry = e,
+                Offset = e.Offset,
+                Size = e.FileSize
+            })
+            .ToList();
+
+        try
+        {
+            using (var src = new FileStream(PakPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var dst = new FileStream(tmpPak, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                byte[] buffer = new byte[1024 * 1024];
+
+                foreach (var item in originals)
+                {
+                    long newOffset = dst.Position;
+                    if (newOffset > uint.MaxValue)
+                        throw new InvalidDataException("새 PAK offset이 32비트 범위를 초과했습니다.");
+
+                    if (replacements.TryGetValue(item.Entry.FileName, out var replacement))
+                    {
+                        dst.Write(replacement, 0, replacement.Length);
+                        item.Entry.Offset = newOffset;
+                        item.Entry.FileSize = replacement.Length;
+                    }
+                    else
+                    {
+                        if (item.Offset < 0 || item.Size < 0 || item.Offset + item.Size > src.Length)
+                            throw new InvalidDataException($"원본 PAK 범위 오류: {item.Entry.FileName}");
+
+                        src.Position = item.Offset;
+                        int remain = item.Size;
+                        while (remain > 0)
+                        {
+                            int want = Math.Min(buffer.Length, remain);
+                            int read = src.Read(buffer, 0, want);
+                            if (read <= 0)
+                                throw new EndOfStreamException($"원본 PAK 읽기 실패: {item.Entry.FileName}");
+                            dst.Write(buffer, 0, read);
+                            remain -= read;
+                        }
+
+                        item.Entry.Offset = newOffset;
+                        item.Entry.FileSize = item.Size;
+                    }
+                }
+
+                dst.Flush(true);
+            }
+
+            File.Move(tmpPak, PakPath, true);
+            SaveIndex();
+        }
+        catch
+        {
+            try { if (File.Exists(tmpPak)) File.Delete(tmpPak); } catch { }
+            throw;
+        }
+    }
+
     public long AppendRaw(byte[] rawData)
     {
         byte[] stored = rawData;
