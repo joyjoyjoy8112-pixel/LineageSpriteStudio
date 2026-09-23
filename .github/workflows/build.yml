@@ -1,4 +1,4 @@
-name: Build V2.3.3 Windows x64
+name: Build V2.3.4 Windows x64
 
 on:
   push:
@@ -24,20 +24,23 @@ jobs:
         shell: pwsh
         run: |
           @"
-          리니지 Sprite Studio V2.3.3
+          리니지 Sprite Studio V2.3.4
           - Sprite00~Sprite15 전체 자동 검색
           - GFX 동작 SPR 실제 PAK 자동 추적
           - 파일명 byte 합계 % 16 분배 검사
           - PNG -> SPR 변환
-          - append 방식 PAK 패치 + IDX 갱신
+          - 3.8 LEGACY28 안전 재묶기 + IDX 갱신
+          - 원본 palette/frame type 및 ZLIB 유지
           - 적용 후 SHA-256 재추출 검증
           - 실패 시 자동 롤백
+          - 원하는 SPR 검색/다중 선택 추출
+          - 전체/선택 SPR을 원본추출 단일 폴더에 저장
           - 0~100% 애니메이션 진행 바
           "@ | Set-Content -Encoding UTF8 publish\README_사용법.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lineage_Sprite_Studio_V2.3.3_win-x64
+          name: Lineage_Sprite_Studio_V2.3.4_win-x64
           path: publish
           if-no-files-found: error

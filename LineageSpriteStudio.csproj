@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <AssemblyName>LineageSpriteStudio</AssemblyName>
     <RootNamespace>LineageSpriteStudio</RootNamespace>
+    <Version>2.3.4</Version>
+    <FileVersion>2.3.4.0</FileVersion>
+    <AssemblyVersion>2.3.4.0</AssemblyVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>
