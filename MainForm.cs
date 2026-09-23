@@ -16,6 +16,7 @@ public sealed class MainForm : Form
     private readonly Button _traceMap = new() { Text = "GFX 실제 매핑 추적", AutoSize = true };
     private readonly Button _apply = new() { Text = "백업 후 클라이언트에 적용", AutoSize = true, Enabled = false };
     private readonly Button _restore = new() { Text = "원본 복원", AutoSize = true };
+    private readonly Button _extractAllSpr = new() { Text = "SPR 전체 추출", AutoSize = true };
     private readonly DataGridView _grid = new()
     {
         Dock = DockStyle.Fill,
@@ -62,7 +63,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.3.2";
+        Text = "리니지 Sprite Studio V2.3.3";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(900, 640);
@@ -76,6 +77,7 @@ public sealed class MainForm : Form
         _traceMap.Click += async (_, _) => await TraceGfxMappingAsync();
         _apply.Click += async (_, _) => await ApplyAsync();
         _restore.Click += async (_, _) => await RestoreLatestBackupAsync();
+        _extractAllSpr.Click += async (_, _) => await ExtractAllSprAsync();
         _grid.SelectionChanged += (_, _) => SelectPreviewFromGrid();
         _grid.CellClick += (_, e) =>
         {
@@ -146,7 +148,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.3.2  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.3.3  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -183,6 +185,7 @@ public sealed class MainForm : Form
         buttons.Controls.Add(_traceMap);
         buttons.Controls.Add(_apply);
         buttons.Controls.Add(_restore);
+        buttons.Controls.Add(_extractAllSpr);
         buttons.Controls.Add(_backup);
         buttons.Controls.Add(new Label { Text = "방향 보정", AutoSize = true, Margin = new Padding(10, 6, 3, 0) });
         buttons.Controls.Add(_directionMap);
@@ -962,7 +965,7 @@ public sealed class MainForm : Form
                 File.WriteAllText(Path.Combine(backupDir, "pak_lengths.json"),
                     JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
                 File.WriteAllText(Path.Combine(backupDir, "README_RESTORE.txt"),
-                    "Lineage Sprite Studio V2.3.2 full backup\r\n" +
+                    "Lineage Sprite Studio V2.3.3 full backup\r\n" +
                     "IDX와 PAK 원본 전체가 들어 있습니다. 프로그램의 '원본 복원' 버튼으로 복원할 수 있습니다.\r\n");
                 Log($"[백업] 원본 IDX/PAK 전체 백업 완료: {backupDir}");
             }
@@ -1060,7 +1063,7 @@ public sealed class MainForm : Form
             Log("[안내] 3.8 LEGACY28은 프로그램 내부에서 안전 재묶기까지 완료했습니다. 외부 eat 묶기를 다시 하지 마세요.");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n3.8 클라이언트는 안전 재묶기까지 완료했습니다.\n외부 eat로 다시 묶지 말고 바로 게임을 실행해서 확인하세요.",
-                "V2.3.2 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.3.3 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -1096,6 +1099,178 @@ public sealed class MainForm : Form
                 Log("[복구 오류] " + rollback);
             }
             MessageBox.Show(this, ex.Message, "적용 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _watch.Stop();
+            _elapsedTimer.Stop();
+            SetBusy(false);
+        }
+    }
+
+    private async Task ExtractAllSprAsync()
+    {
+        if (!Directory.Exists(_client.Text))
+        {
+            MessageBox.Show(this, "클라이언트 폴더를 먼저 선택하세요.", "SPR 전체 추출",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var folder = new FolderBrowserDialog
+        {
+            Description = "전체 SPR을 저장할 폴더를 선택하세요."
+        };
+
+        if (folder.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        string root = Path.GetFullPath(_client.Text);
+        string outputRoot = Path.Combine(
+            folder.SelectedPath,
+            "SpriteStudio_AllSPR_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+
+        Directory.CreateDirectory(outputRoot);
+
+        SetBusy(true);
+        _watch.Restart();
+        _elapsedTimer.Start();
+
+        try
+        {
+            var idxFiles = Directory.EnumerateFiles(root, "Sprite*.idx", SearchOption.TopDirectoryOnly)
+                .Where(p => !p.Contains("SpriteStudio_Backup_", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (idxFiles.Count == 0)
+                throw new InvalidDataException("선택한 클라이언트 폴더에서 Sprite*.idx를 찾지 못했습니다.");
+
+            int totalSpr = 0;
+            int decodedZlib = 0;
+            int failed = 0;
+            var manifest = new List<string>
+            {
+                "IDX\tPAK\tENTRY\tOUTPUT\tZLIB_DECODED\tSIZE"
+            };
+
+            Log($"[SPR 전체 추출] 시작: {root}");
+            Log($"[SPR 전체 추출] Sprite IDX {idxFiles.Count}개 발견");
+
+            for (int idxNo = 0; idxNo < idxFiles.Count; idxNo++)
+            {
+                string idxPath = idxFiles[idxNo];
+                string idxName = Path.GetFileNameWithoutExtension(idxPath);
+                string archiveDir = Path.Combine(outputRoot, idxName);
+                Directory.CreateDirectory(archiveDir);
+
+                try
+                {
+                    using var pak = new SpritePak(idxPath);
+                    var sprEntries = pak.Entries
+                        .Where(e => Path.GetExtension(e.FileName).Equals(".spr", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    Log($"[SPR 전체 추출] {Path.GetFileName(idxPath)} = {pak.IndexFormat} / SPR {sprEntries.Count:N0}개");
+
+                    int localDone = 0;
+                    foreach (var e in sprEntries)
+                    {
+                        localDone++;
+                        try
+                        {
+                            byte[] data = await Task.Run(() => pak.Extract(e));
+                            bool wasZlib = SpriteCodec.IsZlib(data);
+                            if (wasZlib)
+                            {
+                                data = await Task.Run(() => SpriteCodec.DecodeIfNeeded(data));
+                                decodedZlib++;
+                            }
+
+                            // 아카이브별 하위폴더를 사용해 같은 파일명 충돌을 막는다.
+                            // 엔트리의 디렉터리 경로는 제거하고 실제 파일명만 저장한다.
+                            string outName = Path.GetFileName(e.FileName);
+                            string outPath = Path.Combine(archiveDir, outName);
+
+                            if (File.Exists(outPath))
+                            {
+                                string stem = Path.GetFileNameWithoutExtension(outName);
+                                string ext = Path.GetExtension(outName);
+                                int dup = 2;
+                                do
+                                {
+                                    outPath = Path.Combine(archiveDir, $"{stem}__dup{dup}{ext}");
+                                    dup++;
+                                }
+                                while (File.Exists(outPath));
+                            }
+
+                            await File.WriteAllBytesAsync(outPath, data);
+
+                            manifest.Add(string.Join("\t",
+                                Path.GetFileName(idxPath),
+                                Path.GetFileName(pak.PakPath),
+                                e.FileName,
+                                Path.GetRelativePath(outputRoot, outPath),
+                                wasZlib ? "YES" : "NO",
+                                data.Length.ToString()));
+
+                            totalSpr++;
+
+                            if (localDone % 100 == 0 || localDone == sprEntries.Count)
+                            {
+                                int percent = 5 + (int)(90.0 *
+                                    (idxNo + localDone / (double)Math.Max(1, sprEntries.Count)) /
+                                    Math.Max(1, idxFiles.Count));
+
+                                SetProgress(percent,
+                                    $"SPR 추출 중... {Path.GetFileName(idxPath)} {localDone:N0}/{sprEntries.Count:N0}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            failed++;
+                            Log($"[SPR 추출 실패] {Path.GetFileName(idxPath)} / {e.FileName}: {ex.Message}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Log($"[IDX 추출 건너뜀] {Path.GetFileName(idxPath)}: {ex.Message}");
+                }
+            }
+
+            string manifestPath = Path.Combine(outputRoot, "SPR_MANIFEST.tsv");
+            await File.WriteAllLinesAsync(manifestPath, manifest, Encoding.UTF8);
+
+            string readmePath = Path.Combine(outputRoot, "README.txt");
+            await File.WriteAllTextAsync(readmePath,
+                "Lineage Sprite Studio V2.3.3 - SPR 전체 추출\r\n" +
+                "==============================================\r\n" +
+                $"클라이언트: {root}\r\n" +
+                $"추출 SPR: {totalSpr:N0}개\r\n" +
+                $"ZLIB 해제: {decodedZlib:N0}개\r\n" +
+                $"실패: {failed:N0}개\r\n\r\n" +
+                "각 Sprite IDX별 하위폴더에 실제 .spr 파일을 저장합니다.\r\n" +
+                "ZLIB로 감싸져 있던 SPR은 자동으로 해제하여 일반 SPR 데이터로 저장합니다.\r\n" +
+                "SPR_MANIFEST.tsv에서 원래 IDX/PAK/엔트리 위치를 확인할 수 있습니다.\r\n",
+                Encoding.UTF8);
+
+            SetProgress(100, $"SPR 전체 추출 완료 · {totalSpr:N0}개");
+            Log($"[SPR 전체 추출] 완료: {totalSpr:N0}개 / ZLIB 해제 {decodedZlib:N0}개 / 실패 {failed:N0}개");
+            Log($"[SPR 전체 추출] 저장 위치: {outputRoot}");
+
+            MessageBox.Show(this,
+                $"SPR 전체 추출 완료\n\nSPR: {totalSpr:N0}개\nZLIB 해제: {decodedZlib:N0}개\n실패: {failed:N0}개\n\n저장 위치:\n{outputRoot}",
+                "SPR 전체 추출", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            SetProgress(0, "SPR 전체 추출 실패");
+            Log("[SPR 전체 추출 오류] " + ex);
+            MessageBox.Show(this, ex.Message, "SPR 전체 추출 오류",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -1548,6 +1723,7 @@ public sealed class MainForm : Form
         _traceMap.Enabled = !busy;
         _apply.Enabled = !busy && _targets.Count > 0 && _pngByPart.Count > 0;
         _restore.Enabled = !busy;
+        _extractAllSpr.Enabled = !busy;
         _backup.Enabled = !busy;
         _client.Enabled = !busy;
         _png.Enabled = !busy;
