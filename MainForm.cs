@@ -60,7 +60,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.3.0";
+        Text = "리니지 Sprite Studio V2.3.1";
         Width = 1260;
         Height = 820;
         MinimumSize = new Size(980, 680);
@@ -143,7 +143,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.3.0  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.3.1  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -301,7 +301,8 @@ public sealed class MainForm : Form
         try
         {
             int gfx = (int)_gfx.Value;
-            SetProgress(1, "IDX 분석 중...");
+            string root = Path.GetFullPath(_client.Text);
+            SetProgress(1, "3.8 Sprite IDX 분석 중...");
             _targets.Clear();
             _originalFrames.Clear();
             _originalZlib.Clear();
@@ -310,35 +311,53 @@ public sealed class MainForm : Form
             foreach (var p in _opened) p.Dispose();
             _opened.Clear();
 
+            var idxFiles = Directory.EnumerateFiles(root, "Sprite*.idx", SearchOption.TopDirectoryOnly)
+                .Where(p => !p.Contains("SpriteStudio_Backup_", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            Log($"[3.8] Sprite IDX {idxFiles.Count}개 발견");
+            if (idxFiles.Count == 0)
+                Log("[3.8] 선택 폴더에 Sprite*.idx가 없습니다.");
+
             await Task.Run(() =>
             {
-                for (int n = 0; n < 16; n++)
-                {
-                    string idx = FindCaseInsensitive(_client.Text, $"Sprite{n:00}.idx");
-                    if (string.IsNullOrEmpty(idx)) continue;
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                int done = 0;
 
+                foreach (var idx in idxFiles)
+                {
+                    done++;
                     try
                     {
                         var pak = new SpritePak(idx);
                         _opened.Add(pak);
-                        var rx = new Regex($"^{gfx}-(\\d+)\\.spr$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+                        string baseName = Path.GetFileNameWithoutExtension(idx);
+                        int pakNo = -1;
+                        var noMatch = Regex.Match(baseName, @"^Sprite(?<n>\d{2})$", RegexOptions.IgnoreCase);
+                        if (noMatch.Success) int.TryParse(noMatch.Groups["n"].Value, out pakNo);
+
+                        BeginInvoke(() => Log($"[IDX] {Path.GetFileName(idx)} = {pak.IndexFormat}{(pak.IsDesEncrypted ? "+DES" : "")} / {pak.Entries.Count:N0}개"));
+
+                        var rx = new Regex($"^{gfx}-(\\d+)\\.spr$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                         foreach (var e in pak.Entries)
                         {
-                            var m = rx.Match(e.FileName);
+                            var m = rx.Match(Path.GetFileName(e.FileName));
                             if (!m.Success) continue;
+                            if (!seen.Add(e.FileName)) continue;
                             int part = int.Parse(m.Groups[1].Value);
-                            _targets.Add(new SpriteTarget(n, idx, pak, e, part));
+                            _targets.Add(new SpriteTarget(pakNo, idx, pak, e, part));
                         }
                     }
                     catch (Exception ex)
                     {
-                        int pakNo = n;
                         string idxName = Path.GetFileName(idx);
-                        BeginInvoke(() => Log($"[IDX 건너뜀] Sprite{pakNo:00} / {idxName}: {ex.Message}"));
+                        BeginInvoke(() => Log($"[IDX 건너뜀] {idxName}: {ex.Message}"));
                     }
 
-                    ReportFromWorker(3 + n * 3, $"Sprite{n:00}.idx 분석 중...");
+                    ReportFromWorker(3 + (int)(45.0 * done / Math.Max(1, idxFiles.Count)),
+                        $"{Path.GetFileName(idx)} 분석 중...");
                 }
 
                 foreach (var t in _targets)
@@ -356,7 +375,7 @@ public sealed class MainForm : Form
             RebuildGrid();
 
             if (_targets.Count == 0)
-                Log("[검색] 지원되는 Sprite IDX에서 대상 SPR을 찾지 못했습니다. [IDX 건너뜀]의 HEAD 값을 확인하세요.");
+                Log($"[검색] GFX {gfx}의 SPR을 찾지 못했습니다. '클라이언트 전체 IDX 검색'을 눌러 실제 위치를 확인하세요.");
 
             int totalFrames = _originalFrames.Values.Sum();
             int pngCount = _pngByPart.Values.Sum(x => x.Count);
@@ -364,11 +383,14 @@ public sealed class MainForm : Form
             Log($"[검색] 원본 프레임 합계: {totalFrames} / 새 PNG 인식: {pngCount}");
             Log($"[검색] ZLIB SPR: {_originalZlib.Values.Count(v => v)}개 / RAW SPR: {_originalZlib.Values.Count(v => !v)}개");
 
-            var misplaced = _targets.Where(t => SpritePak.ExpectedPakIndex(t.Entry.FileName) != t.PakIndex).ToList();
-            if (misplaced.Count == 0)
-                Log("[분배] 모든 SPR이 파일명 byte합 % 16 규칙과 일치합니다.");
+            var hashed = _targets.Where(t => t.PakIndex >= 0).ToList();
+            var misplaced = hashed.Where(t => SpritePak.ExpectedPakIndex(t.Entry.FileName) != t.PakIndex).ToList();
+            if (hashed.Count == 0)
+                Log("[분배] Sprite.idx 단일 PAK 구조 또는 번호 없는 Sprite PAK 구조입니다.");
+            else if (misplaced.Count == 0)
+                Log("[분배] 번호형 Sprite PAK의 파일명 byte합 % 16 분배가 일치합니다.");
             else
-                Log($"[경고] PAK 분배 불일치 {misplaced.Count}개 발견");
+                Log($"[경고] 번호형 PAK 분배 불일치 {misplaced.Count}개 발견");
 
             SetProgress(100, $"검색 완료 · {_targets.Count}개 SPR");
             _apply.Enabled = _targets.Count > 0 && _pngByPart.Count > 0;
@@ -420,7 +442,7 @@ public sealed class MainForm : Form
             Log($"[전체IDX] 검색 시작: {root}");
             Log($"[전체IDX] IDX 파일 {idxFiles.Count}개 발견");
 
-            var hits = new List<(string Dir, string Idx, int Count, List<int> Parts)>();
+            var hits = new List<(string Dir, string Idx, string Format, int Count, List<int> Parts)>();
             int done = 0;
 
             await Task.Run(() =>
@@ -436,14 +458,14 @@ public sealed class MainForm : Form
                         string pak = Path.ChangeExtension(idx, ".pak");
                         if (!File.Exists(pak)) continue;
 
-                        using var sp = new SpritePak(idx);
+                        using var sp = new AnyPakScanner(idx);
                         var rx = new Regex($"^{gfx}-(\\d+)\\.spr$",
                             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
                         var parts = new List<int>();
                         foreach (var e in sp.Entries)
                         {
-                            var m = rx.Match(e.FileName);
+                            var m = rx.Match(Path.GetFileName(e.FileName));
                             if (m.Success && int.TryParse(m.Groups[1].Value, out int part))
                                 parts.Add(part);
                         }
@@ -452,7 +474,7 @@ public sealed class MainForm : Form
                         {
                             lock (hits)
                             {
-                                hits.Add((Path.GetDirectoryName(idx) ?? "", idx, parts.Count, parts));
+                                hits.Add((Path.GetDirectoryName(idx) ?? "", idx, sp.Format + (sp.DesEncrypted ? "+DES" : ""), parts.Count, parts));
                             }
                         }
                     }
@@ -471,7 +493,7 @@ public sealed class MainForm : Form
                     IdxCount = g.Count(),
                     EntryCount = g.Sum(x => x.Count),
                     Parts = g.SelectMany(x => x.Parts).Distinct().OrderBy(x => x).ToList(),
-                    Files = g.Select(x => Path.GetFileName(x.Idx)).OrderBy(x => x).ToList()
+                    Files = g.Select(x => $"{Path.GetFileName(x.Idx)}[{x.Format}]").OrderBy(x => x).ToList()
                 })
                 .OrderByDescending(g => g.EntryCount)
                 .ThenBy(g => g.Dir, StringComparer.OrdinalIgnoreCase)
@@ -565,7 +587,7 @@ public sealed class MainForm : Form
 
             var candidates = new List<(string Source, byte[] Data)>();
 
-            foreach (var name in new[] { "list.spr", "wlist.spr" })
+            foreach (var name in new[] { "list.spr", "wlist.spr", "list.spz", "wlist.spz" })
             {
                 try
                 {
@@ -592,15 +614,17 @@ public sealed class MainForm : Form
                 try
                 {
                     if (!File.Exists(Path.ChangeExtension(idx, ".pak"))) continue;
-                    using var pak = new SpritePak(idx);
+                    using var pak = new AnyPakScanner(idx);
                     foreach (var e in pak.Entries)
                     {
                         string fn = Path.GetFileName(e.FileName);
                         if (!fn.Equals("list.spr", StringComparison.OrdinalIgnoreCase) &&
-                            !fn.Equals("wlist.spr", StringComparison.OrdinalIgnoreCase))
+                            !fn.Equals("wlist.spr", StringComparison.OrdinalIgnoreCase) &&
+                            !fn.Equals("list.spz", StringComparison.OrdinalIgnoreCase) &&
+                            !fn.Equals("wlist.spz", StringComparison.OrdinalIgnoreCase))
                             continue;
 
-                        candidates.Add(($"PAK: {idx} -> {e.FileName}", pak.Extract(e)));
+                        candidates.Add(($"PAK[{pak.Format}]: {idx} -> {e.FileName}", pak.Extract(e)));
                     }
                 }
                 catch
@@ -616,28 +640,26 @@ public sealed class MainForm : Form
 
             if (candidates.Count == 0)
             {
-                Log("[실제매핑] list.spr / wlist.spr을 찾지 못했습니다.");
+                Log("[실제매핑] list.spr / wlist.spr / list.spz를 찾지 못했습니다.");
                 MessageBox.Show(this,
-                    "클라이언트와 지원되는 IDX/PAK 안에서 list.spr / wlist.spr을 찾지 못했습니다.\n로그를 보내주세요.",
+                    "클라이언트와 지원되는 IDX/PAK 안에서 list.spr / wlist.spr / list.spz를 찾지 못했습니다.\n로그를 보내주세요.",
                     "GFX 실제 매핑", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 SetProgress(100, "매핑 테이블 없음");
                 return;
             }
 
-            Log($"[실제매핑] list.spr/wlist.spr 후보 {candidates.Count}개 발견");
+            Log($"[실제매핑] list/wlist 후보 {candidates.Count}개 발견");
 
             var archiveEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            try
+            foreach (var idx in Directory.EnumerateFiles(root, "Sprite*.idx", SearchOption.TopDirectoryOnly))
             {
-                for (int n = 0; n < 16; n++)
+                try
                 {
-                    string idx = FindCaseInsensitive(root, $"Sprite{n:00}.idx");
-                    if (string.IsNullOrEmpty(idx)) continue;
-                    using var p = new SpritePak(idx);
-                    foreach (var e in p.Entries) archiveEntries.Add(e.FileName);
+                    using var p = new AnyPakScanner(idx);
+                    foreach (var e in p.Entries) archiveEntries.Add(Path.GetFileName(e.FileName));
                 }
+                catch { }
             }
-            catch { }
 
             int foundEntries = 0;
             foreach (var candidate in candidates)
@@ -831,9 +853,9 @@ public sealed class MainForm : Form
             int sourcePart = GetMappedSourcePart(t.Part);
             int png = GetMappedPngFiles(t.Part)?.Count ?? 0;
             int expected = SpritePak.ExpectedPakIndex(t.Entry.FileName);
-            string dist = expected == t.PakIndex ? "OK" : $"예상 {expected:00}";
+            string dist = t.PakIndex < 0 ? "단일/기본 PAK" : (expected == t.PakIndex ? "OK" : $"예상 {expected:00}");
             string mapText = sourcePart >= 0 ? $"{(int)_gfx.Value}-{sourcePart}.spr" : "없음";
-            int row = _grid.Rows.Add(t.Part, t.Entry.FileName, $"Sprite{t.PakIndex:00}.pak", frames, png, mapText, dist);
+            int row = _grid.Rows.Add(t.Part, t.Entry.FileName, Path.GetFileName(t.Pak.PakPath), frames, png, mapText, dist);
             if (png != frames) _grid.Rows[row].DefaultCellStyle.BackColor = Color.MistyRose;
         }
     }
@@ -927,13 +949,13 @@ public sealed class MainForm : Form
             }
 
             done = 0;
-            foreach (var group in _targets.GroupBy(t => t.PakIndex).OrderBy(g => g.Key))
+            foreach (var group in _targets.GroupBy(t => t.IdxPath, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
             {
                 var pak = group.First().Pak;
                 foreach (var t in group)
                 {
                     var spr = generated[t.Entry.FileName];
-                    SetProgress(52 + (int)(28.0 * done / total), $"PAK 적용 중... {done + 1}/{total} · Sprite{t.PakIndex:00}.pak");
+                    SetProgress(52 + (int)(28.0 * done / total), $"PAK 적용 중... {done + 1}/{total} · {Path.GetFileName(t.Pak.PakPath)}");
                     long offset = await Task.Run(() => pak.AppendRaw(spr));
                     t.Entry.Offset = offset;
                     t.Entry.FileSize = spr.Length;
@@ -946,7 +968,7 @@ public sealed class MainForm : Form
 
             SetProgress(82, "적용 결과 재검증 중...");
             int verified = 0;
-            foreach (var group in _targets.GroupBy(t => t.PakIndex).OrderBy(g => g.Key))
+            foreach (var group in _targets.GroupBy(t => t.IdxPath, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
             {
                 string idx = group.First().IdxPath;
                 using var check = new SpritePak(idx);
@@ -968,7 +990,7 @@ public sealed class MainForm : Form
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
             MessageBox.Show(this,
                 $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.3.0 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                "V2.3.1 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
