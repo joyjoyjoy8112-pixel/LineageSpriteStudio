@@ -15,6 +15,7 @@ public sealed class MainForm : Form
     private readonly Button _deepScan = new() { Text = "클라이언트 전체 IDX 검색", AutoSize = true };
     private readonly Button _traceMap = new() { Text = "GFX 실제 매핑 추적", AutoSize = true };
     private readonly Button _apply = new() { Text = "백업 후 클라이언트에 적용", AutoSize = true, Enabled = false };
+    private readonly Button _restore = new() { Text = "원본 복원", AutoSize = true };
     private readonly DataGridView _grid = new()
     {
         Dock = DockStyle.Fill,
@@ -29,7 +30,7 @@ public sealed class MainForm : Form
     private readonly Label _status = new() { Text = "대기 중", AutoSize = true };
     private readonly Label _elapsed = new() { Text = "00:00", AutoSize = true };
     private readonly AnimatedProgressBar _progress = new() { Dock = DockStyle.Fill, Height = 28 };
-    private readonly CheckBox _backup = new() { Text = "적용 전 복구용 백업 생성", Checked = true, AutoSize = true };
+    private readonly CheckBox _backup = new() { Text = "적용 전 원본 전체 백업", Checked = true, AutoSize = true };
     private readonly PictureBox _originalPreview = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 20, 24) };
     private readonly PictureBox _newPreview = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(18, 20, 24) };
     private readonly NumericUpDown _previewFrame = new() { Minimum = 0, Maximum = 0, Value = 0, Width = 72 };
@@ -54,16 +55,17 @@ public sealed class MainForm : Form
     private readonly Dictionary<int, List<string>> _pngByPart = new();
     private readonly Dictionary<int, int> _originalFrames = new();
     private readonly Dictionary<int, bool> _originalZlib = new();
+    private readonly Dictionary<int, SprFormatInfo> _originalFormat = new();
     private readonly List<SpritePak> _opened = new();
     private readonly Stopwatch _watch = new();
     private readonly System.Windows.Forms.Timer _elapsedTimer = new() { Interval = 250 };
 
     public MainForm()
     {
-        Text = "리니지 Sprite Studio V2.3.1";
+        Text = "리니지 Sprite Studio V2.3.2";
         Width = 1260;
         Height = 820;
-        MinimumSize = new Size(980, 680);
+        MinimumSize = new Size(900, 640);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9F);
 
@@ -73,6 +75,7 @@ public sealed class MainForm : Form
         _deepScan.Click += async (_, _) => await DeepScanAllIdxAsync();
         _traceMap.Click += async (_, _) => await TraceGfxMappingAsync();
         _apply.Click += async (_, _) => await ApplyAsync();
+        _restore.Click += async (_, _) => await RestoreLatestBackupAsync();
         _grid.SelectionChanged += (_, _) => SelectPreviewFromGrid();
         _grid.CellClick += (_, e) =>
         {
@@ -133,7 +136,7 @@ public sealed class MainForm : Form
 
     private void BuildUi()
     {
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(12) };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(12), AutoScroll = true };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
@@ -143,7 +146,7 @@ public sealed class MainForm : Form
 
         var title = new Label
         {
-            Text = "Lineage Sprite Studio V2.3.1  ·  전체 Sprite00~15 자동 추적/검증",
+            Text = "Lineage Sprite Studio V2.3.2  ·  전체 Sprite00~15 자동 추적/검증",
             Font = new Font(Font.FontFamily, 15F, FontStyle.Bold),
             AutoSize = true,
             Padding = new Padding(0, 0, 0, 8)
@@ -167,23 +170,31 @@ public sealed class MainForm : Form
         settings.Controls.Add(_png, 1, 1);
         var browsePng = new Button { Text = "폴더 선택", AutoSize = true };
         settings.Controls.Add(browsePng, 2, 1);
-        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(10, 0, 0, 0) };
+        var buttons = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Margin = new Padding(0, 6, 0, 0)
+        };
         buttons.Controls.Add(_scan);
         buttons.Controls.Add(_deepScan);
         buttons.Controls.Add(_traceMap);
         buttons.Controls.Add(_apply);
+        buttons.Controls.Add(_restore);
         buttons.Controls.Add(_backup);
         buttons.Controls.Add(new Label { Text = "방향 보정", AutoSize = true, Margin = new Padding(10, 6, 3, 0) });
         buttons.Controls.Add(_directionMap);
-        settings.Controls.Add(buttons, 3, 1);
-        settings.SetColumnSpan(buttons, 2);
+        settings.Controls.Add(buttons, 0, 2);
+        settings.SetColumnSpan(buttons, 5);
 
         var mappingBar = new FlowLayoutPanel
         {
             AutoSize = true,
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
+            WrapContents = true,
             Margin = new Padding(0, 6, 0, 0)
         };
         mappingBar.Controls.Add(new Label { Text = "동작 그룹 오프셋", AutoSize = true, Margin = new Padding(0, 6, 4, 0) });
@@ -193,7 +204,7 @@ public sealed class MainForm : Form
         mappingBar.Controls.Add(_sourceGroup);
         mappingBar.Controls.Add(_mapSelectedGroup);
         mappingBar.Controls.Add(_clearSelectedGroupMap);
-        settings.Controls.Add(mappingBar, 0, 2);
+        settings.Controls.Add(mappingBar, 0, 3);
         settings.SetColumnSpan(mappingBar, 5);
 
         browseClient.Click += (_, _) =>
@@ -306,6 +317,7 @@ public sealed class MainForm : Form
             _targets.Clear();
             _originalFrames.Clear();
             _originalZlib.Clear();
+            _originalFormat.Clear();
             _groupMapOverrides.Clear();
             _groupOffset.Value = 0;
             foreach (var p in _opened) p.Dispose();
@@ -366,7 +378,9 @@ public sealed class MainForm : Form
                     bool zlib = SpriteCodec.IsZlib(stored);
                     var raw = SpriteCodec.DecodeIfNeeded(stored);
                     _originalZlib[t.Part] = zlib;
-                    _originalFrames[t.Part] = SprInfo.FrameCount(raw);
+                    var format = SprInfo.Analyze(raw);
+                    _originalFormat[t.Part] = format;
+                    _originalFrames[t.Part] = format.FrameCount;
                 }
             });
 
@@ -382,6 +396,16 @@ public sealed class MainForm : Form
             Log($"[검색] GFX {gfx}: {_targets.Count}개 동작 SPR 찾음");
             Log($"[검색] 원본 프레임 합계: {totalFrames} / 새 PNG 인식: {pngCount}");
             Log($"[검색] ZLIB SPR: {_originalZlib.Values.Count(v => v)}개 / RAW SPR: {_originalZlib.Values.Count(v => !v)}개");
+            int paletteSpr = _originalFormat.Values.Count(v => v.IsPalette);
+            Log($"[검색] SPR 색상 형식: PALETTE {paletteSpr}개 / RGB555 {_originalFormat.Count - paletteSpr}개");
+            if (_originalFormat.Count > 0)
+            {
+                string types = string.Join(", ", _originalFormat.Values
+                    .GroupBy(v => v.FrameType)
+                    .OrderBy(g => g.Key)
+                    .Select(g => $"type {g.Key}={g.Count()}"));
+                Log($"[검색] 프레임 타입: {types}");
+            }
 
             var hashed = _targets.Where(t => t.PakIndex >= 0).ToList();
             var misplaced = hashed.Where(t => SpritePak.ExpectedPakIndex(t.Entry.FileName) != t.PakIndex).ToList();
@@ -917,22 +941,30 @@ public sealed class MainForm : Form
             SetProgress(2, "적용 준비 중...");
             var uniquePaks = _targets.Select(t => t.Pak).Distinct().ToList();
 
+            foreach (var pak in uniquePaks)
+                originals[pak.PakPath] = new FileInfo(pak.PakPath).Length;
+
             if (_backup.Checked)
             {
                 backupDir = Path.Combine(_client.Text, "SpriteStudio_Backup_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
                 Directory.CreateDirectory(backupDir);
-                foreach (var pak in uniquePaks)
+
+                foreach (string idxPath in uniquePaks.Select(p => p.IdxPath).Distinct(StringComparer.OrdinalIgnoreCase))
+                    File.Copy(idxPath, Path.Combine(backupDir, Path.GetFileName(idxPath)), true);
+
+                foreach (string pakPath in uniquePaks.Select(p => p.PakPath).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    File.Copy(pak.IdxPath, Path.Combine(backupDir, Path.GetFileName(pak.IdxPath)), true);
-                    originals[pak.PakPath] = new FileInfo(pak.PakPath).Length;
+                    SetProgress(4, $"원본 전체 백업 중... {Path.GetFileName(pakPath)}");
+                    await Task.Run(() => File.Copy(pakPath, Path.Combine(backupDir, Path.GetFileName(pakPath)), true));
                 }
+
                 var manifest = originals.ToDictionary(k => Path.GetFileName(k.Key), v => v.Value);
-                File.WriteAllText(Path.Combine(backupDir, "pak_lengths.json"), JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
-                Log($"[백업] {backupDir}");
-            }
-            else
-            {
-                foreach (var pak in uniquePaks) originals[pak.PakPath] = new FileInfo(pak.PakPath).Length;
+                File.WriteAllText(Path.Combine(backupDir, "pak_lengths.json"),
+                    JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(Path.Combine(backupDir, "README_RESTORE.txt"),
+                    "Lineage Sprite Studio V2.3.2 full backup\r\n" +
+                    "IDX와 PAK 원본 전체가 들어 있습니다. 프로그램의 '원본 복원' 버튼으로 복원할 수 있습니다.\r\n");
+                Log($"[백업] 원본 IDX/PAK 전체 백업 완료: {backupDir}");
             }
 
             int done = 0;
@@ -941,7 +973,22 @@ public sealed class MainForm : Form
             {
                 var pngs = GetMappedPngFiles(t.Part) ?? throw new InvalidDataException($"동작 {t.Part}의 PNG를 찾지 못했습니다.");
                 SetProgress(8 + (int)(42.0 * done / total), $"SPR 생성 중... {done + 1}/{total} · {t.Entry.FileName}");
-                byte[] rawSpr = await Task.Run(() => SprEncoder.CreateFromPngs(pngs));
+                var originalFormat = _originalFormat.TryGetValue(t.Part, out var fmt)
+                    ? fmt
+                    : new SprFormatInfo(pngs.Count, false, 0, 0);
+
+                byte[] rawSpr = await Task.Run(() =>
+                    SprEncoder.CreateFromPngs(pngs, originalFormat.IsPalette, originalFormat.FrameType));
+
+                var generatedFormat = SprInfo.Analyze(rawSpr);
+                if (generatedFormat.FrameCount != pngs.Count)
+                    throw new InvalidDataException($"생성 SPR 프레임 검증 실패: {t.Entry.FileName}");
+
+                // 자체 decoder로 첫/마지막 프레임까지 실제 해석해 본다.
+                using (var firstFrame = SprDecoder.DecodeFrame(rawSpr, 0)) { }
+                if (pngs.Count > 1)
+                    using (var lastFrame = SprDecoder.DecodeFrame(rawSpr, pngs.Count - 1)) { }
+
                 bool useZlib = _originalZlib.TryGetValue(t.Part, out var z) && z;
                 byte[] storedSpr = useZlib ? await Task.Run(() => SpriteCodec.EncodeZlib(rawSpr)) : rawSpr;
                 generated[t.Entry.FileName] = storedSpr;
@@ -949,21 +996,43 @@ public sealed class MainForm : Form
             }
 
             done = 0;
-            foreach (var group in _targets.GroupBy(t => t.IdxPath, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var group in _targets
+                .GroupBy(t => t.IdxPath, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
             {
                 var pak = group.First().Pak;
-                foreach (var t in group)
+
+                if (pak.IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) && !pak.IsDesEncrypted)
                 {
-                    var spr = generated[t.Entry.FileName];
-                    SetProgress(52 + (int)(28.0 * done / total), $"PAK 적용 중... {done + 1}/{total} · {Path.GetFileName(t.Pak.PakPath)}");
-                    long offset = await Task.Run(() => pak.AppendRaw(spr));
-                    t.Entry.Offset = offset;
-                    t.Entry.FileSize = spr.Length;
-                    t.Entry.CompressedSize = 0;
-                    t.Entry.Flags = 0;
-                    done++;
+                    // 3.8 구형 클라이언트는 단순 append보다 실제 묶기와 같은 compact rebuild가 안전하다.
+                    var replacements = group.ToDictionary(
+                        t => t.Entry.FileName,
+                        t => generated[t.Entry.FileName],
+                        StringComparer.OrdinalIgnoreCase);
+
+                    SetProgress(52 + (int)(28.0 * done / total),
+                        $"3.8 안전 재묶기 중... {Path.GetFileName(pak.PakPath)}");
+                    Log($"[3.8 재묶기] {Path.GetFileName(pak.IdxPath)} + {Path.GetFileName(pak.PakPath)} / 교체 {replacements.Count}개");
+                    await Task.Run(() => pak.RebuildLegacyPak(replacements));
+                    done += group.Count();
                 }
-                await Task.Run(pak.SaveIndex);
+                else
+                {
+                    foreach (var t in group)
+                    {
+                        var spr = generated[t.Entry.FileName];
+                        SetProgress(52 + (int)(28.0 * done / total),
+                            $"PAK 적용 중... {done + 1}/{total} · {Path.GetFileName(t.Pak.PakPath)}");
+                        long offset = await Task.Run(() => pak.AppendRaw(spr));
+                        t.Entry.Offset = offset;
+                        t.Entry.FileSize = spr.Length;
+                        t.Entry.CompressedSize = 0;
+                        t.Entry.Flags = 0;
+                        done++;
+                    }
+
+                    await Task.Run(pak.SaveIndex);
+                }
             }
 
             SetProgress(82, "적용 결과 재검증 중...");
@@ -988,9 +1057,10 @@ public sealed class MainForm : Form
             SetProgress(100, $"완료 · {verified}개 SPR 검증 성공");
             Log($"[완료] GFX {(int)_gfx.Value}: {verified}/{total} SPR 재추출 해시 검증 성공");
             Log($"[완료] 새 PNG {_pngByPart.Values.Sum(x => x.Count)}프레임 적용");
+            Log("[안내] 3.8 LEGACY28은 프로그램 내부에서 안전 재묶기까지 완료했습니다. 외부 eat 묶기를 다시 하지 마세요.");
             MessageBox.Show(this,
-                $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n이제 게임을 완전히 종료 후 다시 실행해서 확인하세요.",
-                "V2.3.1 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                $"적용 및 재검증 완료\n\nSPR: {verified}/{total}\nPNG: {_pngByPart.Values.Sum(x => x.Count)}프레임\n\n3.8 클라이언트는 안전 재묶기까지 완료했습니다.\n외부 eat로 다시 묶지 말고 바로 게임을 실행해서 확인하세요.",
+                "V2.3.2 적용 완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -1009,19 +1079,129 @@ public sealed class MainForm : Form
 
                 if (backupDir != null)
                 {
-                    foreach (var f in Directory.EnumerateFiles(backupDir, "Sprite*.idx"))
+                    var backupPaks = Directory.EnumerateFiles(backupDir, "Sprite*.pak", SearchOption.TopDirectoryOnly).ToList();
+                    if (backupPaks.Count > 0)
                     {
-                        string dst = Path.Combine(_client.Text, Path.GetFileName(f));
-                        File.Copy(f, dst, true);
+                        foreach (var f in backupPaks)
+                            File.Copy(f, Path.Combine(_client.Text, Path.GetFileName(f)), true);
                     }
+
+                    foreach (var f in Directory.EnumerateFiles(backupDir, "Sprite*.idx", SearchOption.TopDirectoryOnly))
+                        File.Copy(f, Path.Combine(_client.Text, Path.GetFileName(f)), true);
                 }
-                Log("[복구] 적용 전 상태로 IDX/PAK 길이를 복구했습니다.");
+                Log("[복구] 적용 전 원본 IDX/PAK 상태로 복구했습니다.");
             }
             catch (Exception rollback)
             {
                 Log("[복구 오류] " + rollback);
             }
             MessageBox.Show(this, ex.Message, "적용 실패", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _watch.Stop();
+            _elapsedTimer.Stop();
+            SetBusy(false);
+        }
+    }
+
+    private async Task RestoreLatestBackupAsync()
+    {
+        if (!Directory.Exists(_client.Text))
+        {
+            MessageBox.Show(this, "클라이언트 폴더를 먼저 선택하세요.", "원본 복원",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var backups = Directory.EnumerateDirectories(_client.Text, "SpriteStudio_Backup_*", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (backups.Count == 0)
+        {
+            MessageBox.Show(this, "이 클라이언트 폴더에서 Sprite Studio 백업을 찾지 못했습니다.",
+                "원본 복원", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        string backupDir = backups[0];
+        var fullPaks = Directory.EnumerateFiles(backupDir, "Sprite*.pak", SearchOption.TopDirectoryOnly).ToList();
+        bool fullBackup = fullPaks.Count > 0;
+
+        string note = fullBackup
+            ? "IDX와 PAK 전체 원본을 복원합니다."
+            : "이 백업은 구버전 백업(IDX + PAK 길이)입니다.\n외부 eat로 PAK 전체를 다시 묶은 뒤라면 완전 복원이 보장되지 않습니다.";
+
+        if (MessageBox.Show(this,
+            $"가장 최근 백업을 복원합니다.\n\n{Path.GetFileName(backupDir)}\n\n{note}\n\n게임을 완전히 종료한 뒤 진행하세요.",
+            "원본 복원 확인", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
+            return;
+
+        SetBusy(true);
+        _watch.Restart();
+        _elapsedTimer.Start();
+
+        try
+        {
+            SetProgress(5, "원본 복원 준비 중...");
+
+            foreach (var p in _opened) p.Dispose();
+            _opened.Clear();
+
+            if (fullBackup)
+            {
+                int i = 0;
+                foreach (var pak in fullPaks)
+                {
+                    i++;
+                    SetProgress(10 + (int)(65.0 * i / Math.Max(1, fullPaks.Count)),
+                        $"PAK 원본 복원 중... {Path.GetFileName(pak)}");
+                    string dst = Path.Combine(_client.Text, Path.GetFileName(pak));
+                    await Task.Run(() => File.Copy(pak, dst, true));
+                }
+            }
+            else
+            {
+                string lengthsPath = Path.Combine(backupDir, "pak_lengths.json");
+                if (File.Exists(lengthsPath))
+                {
+                    var lengths = JsonSerializer.Deserialize<Dictionary<string, long>>(File.ReadAllText(lengthsPath))
+                        ?? new Dictionary<string, long>();
+
+                    foreach (var kv in lengths)
+                    {
+                        string dst = Path.Combine(_client.Text, kv.Key);
+                        if (!File.Exists(dst)) continue;
+
+                        using var fs = new FileStream(dst, FileMode.Open, FileAccess.Write, FileShare.None);
+                        if (fs.Length >= kv.Value)
+                            fs.SetLength(kv.Value);
+                    }
+                }
+            }
+
+            foreach (var idx in Directory.EnumerateFiles(backupDir, "Sprite*.idx", SearchOption.TopDirectoryOnly))
+                File.Copy(idx, Path.Combine(_client.Text, Path.GetFileName(idx)), true);
+
+            SetProgress(100, "원본 복원 완료");
+            Log($"[원본 복원] {backupDir}");
+            Log(fullBackup
+                ? "[원본 복원] IDX + PAK 전체 원본 복원 완료"
+                : "[원본 복원] 구버전 백업으로 IDX/PAK 길이 복원 완료");
+
+            MessageBox.Show(this,
+                fullBackup
+                    ? "원본 IDX/PAK 전체 복원이 완료되었습니다."
+                    : "구버전 백업 복원이 완료되었습니다.\n단, eat로 PAK 전체를 다시 묶은 상태였다면 원본 클라이언트의 PAK로 다시 복사하는 것이 가장 안전합니다.",
+                "원본 복원", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            SetProgress(0, "원본 복원 실패");
+            Log("[원본 복원 오류] " + ex);
+            MessageBox.Show(this, ex.Message, "원본 복원 오류",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -1367,6 +1547,8 @@ public sealed class MainForm : Form
         _deepScan.Enabled = !busy;
         _traceMap.Enabled = !busy;
         _apply.Enabled = !busy && _targets.Count > 0 && _pngByPart.Count > 0;
+        _restore.Enabled = !busy;
+        _backup.Enabled = !busy;
         _client.Enabled = !busy;
         _png.Enabled = !busy;
         _gfx.Enabled = !busy;
