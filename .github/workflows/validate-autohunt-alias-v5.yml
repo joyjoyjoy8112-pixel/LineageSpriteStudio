@@ -25,3 +25,10 @@ jobs:
         run: >
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File
           "ValidationV5\PATCH_AUTOHUNT_ALIAS_V5.ps1" -SelfTest
+
+      - name: Upload exact validated script
+        uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_ALIAS_V5_PS51_VALIDATED_SCRIPT
+          path: ValidationV5/PATCH_AUTOHUNT_ALIAS_V5.ps1
+          if-no-files-found: error
