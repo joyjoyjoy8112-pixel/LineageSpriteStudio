@@ -1,0 +1,25 @@
+name: Package Standalone AutoHunt UI V3
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_v3 | Out-Null
+          Copy-Item StandaloneAutoHuntUIV3\AUTOHUNT_STANDALONE_UI_V3.ps1 package_v3\
+          Copy-Item StandaloneAutoHuntUIV3\UPDATE_AUTOHUNT_V3.bat package_v3\
+          Copy-Item StandaloneAutoHuntUIV3\README_사용법.txt package_v3\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_STANDALONE_UI_V3
+          path: package_v3
+          if-no-files-found: error
