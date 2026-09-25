@@ -1,0 +1,25 @@
+name: Package Original Bot Test
+
+on:
+  push:
+    branches:
+      - autohunt-diag20-labels
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_origbot | Out-Null
+          Copy-Item tools\original_bot_test\ORIGINAL_BOT_WINDOW_TEST.ps1 package_origbot\
+          Copy-Item tools\original_bot_test\RUN_ORIGINAL_BOT_TEST.bat package_origbot\
+          Copy-Item tools\original_bot_test\README.txt package_origbot\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ORIGINAL_BOT_WINDOW_TEST
+          path: package_origbot
+          if-no-files-found: error
