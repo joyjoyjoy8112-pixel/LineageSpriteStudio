@@ -1,0 +1,67 @@
+name: Package Standalone AutoHunt UI V3.1 Validated
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+    paths:
+      - 'StandaloneAutoHuntUIV3/**'
+      - '.github/workflows/standalone-autohunt-ui-v3-1-validated.yml'
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Windows PowerShell 5.1 compatible package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_v31 | Out-Null
+
+          $src = [IO.File]::ReadAllText(
+            (Resolve-Path 'StandaloneAutoHuntUIV3\AUTOHUNT_STANDALONE_UI_V3.ps1'),
+            [Text.Encoding]::UTF8
+          )
+          $utf8Bom = New-Object Text.UTF8Encoding($true)
+          [IO.File]::WriteAllText(
+            (Join-Path (Resolve-Path 'package_v31') 'AUTOHUNT_STANDALONE_UI_V3_1.ps1'),
+            $src,
+            $utf8Bom
+          )
+
+          @'
+          @echo off
+          chcp 65001 >nul
+          title AUTOHUNT STANDALONE UI V3.1
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0AUTOHUNT_STANDALONE_UI_V3_1.ps1"
+          echo.
+          pause
+          '@ | Set-Content -Encoding ASCII package_v31\UPDATE_AUTOHUNT_V3_1.bat
+
+          @'
+          AUTOHUNT STANDALONE UI V3.1
+
+          This package is validated with Windows PowerShell 5.1 before release.
+          The PS1 file is encoded as UTF-8 WITH BOM so Korean string literals parse correctly.
+
+          Client path:
+          D:\리니지1\리니지클라\클라
+
+          Run:
+          UPDATE_AUTOHUNT_V3_1.bat
+          '@ | Set-Content -Encoding UTF8 package_v31\README.txt
+
+      - name: Validate packaged script with Windows PowerShell 5.1
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -Command
+          "$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'package_v31\AUTOHUNT_STANDALONE_UI_V3_1.ps1'),[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|%%{Write-Host ($_.Extent.StartLineNumber.ToString()+': '+$_.Message)};exit 1}else{Write-Host 'WINDOWS_POWERSHELL_5_1_PARSE_OK'}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_STANDALONE_UI_V3_1_VALIDATED
+          path: package_v31
+          if-no-files-found: error
