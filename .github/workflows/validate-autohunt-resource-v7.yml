@@ -25,3 +25,10 @@ jobs:
         run: >
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File
           "ValidationV7\PATCH_AUTOHUNT_RESOURCE_V7.ps1" -SelfTest
+
+      - name: Upload exact validated script
+        uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_RESOURCE_V7_VALIDATED_SCRIPT
+          path: ValidationV7/PATCH_AUTOHUNT_RESOURCE_V7.ps1
+          if-no-files-found: error
