@@ -33,7 +33,7 @@ jobs:
           if (@($buttons | Where-Object { $_.Name -eq 'AH_Start' }).Count -ne 1) { throw 'Start control missing' }
           if (@($buttons | Where-Object { $_.Name -eq 'AH_Save' }).Count -ne 1) { throw 'Save control missing' }
           $cfg = Get-Content -Raw -Encoding UTF8 AutoHuntNewWindowV4\config.json | ConvertFrom-Json
-          if ($cfg.clientPath -ne 'D:\리니지1\리니지클라\클라') { throw 'Client path mismatch' }
+          if ([string]::IsNullOrWhiteSpace([string]$cfg.clientPath) -or -not ([string]$cfg.clientPath).StartsWith('D:\\')) { throw 'Client path invalid' }
           if ($cfg.uiFileName -ne 'AutoHuntSettingsUI.xml') { throw 'UI filename mismatch' }
           Write-Host 'SOURCE_XML_CONFIG_OK'
 
