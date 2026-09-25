@@ -1,0 +1,27 @@
+name: Validate AutoHunt Resource V7 PowerShell 5.1
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+    paths:
+      - 'ValidationV7/**'
+      - '.github/workflows/validate-autohunt-resource-v7.yml'
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse with Windows PowerShell 5.1
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -Command
+          "$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'ValidationV7\PATCH_AUTOHUNT_RESOURCE_V7.ps1'),[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|%%{Write-Host ($_.Extent.StartLineNumber.ToString()+': '+$_.Message)};exit 1}else{Write-Host 'WINDOWS_POWERSHELL_5_1_PARSE_OK'}"
+
+      - name: Run self-test with Windows PowerShell 5.1
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+          "ValidationV7\PATCH_AUTOHUNT_RESOURCE_V7.ps1" -SelfTest
