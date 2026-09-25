@@ -1,0 +1,62 @@
+name: Analyze public MJLin UI loader
+
+on:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: windows-latest
+    steps:
+      - name: Download public MJLin
+        shell: powershell
+        run: |
+          $ProgressPreference='SilentlyContinue'
+          $urls=@(
+            'https://lin.lintozone.net/MJLin.bin',
+            'http://lin.lintozone.net/MJLin.bin'
+          )
+          $ok=$false
+          foreach($u in $urls){
+            try{
+              Invoke-WebRequest -Uri $u -OutFile MJLin.bin -UseBasicParsing -TimeoutSec 30
+              if((Get-Item MJLin.bin).Length -gt 100000){$ok=$true;break}
+            }catch{Write-Host "DOWNLOAD_FAIL $u $($_.Exception.Message)"}
+          }
+          if(-not $ok){throw 'No public MJLin downloaded'}
+          $h=Get-FileHash MJLin.bin -Algorithm SHA256
+          Write-Host "SIZE=$((Get-Item MJLin.bin).Length)"
+          Write-Host "SHA256=$($h.Hash)"
+      - name: Scan strings
+        shell: powershell
+        run: |
+          $b=[IO.File]::ReadAllBytes('MJLin.bin')
+          $targets=@('MainButtonUI.xml','HighRankUI.xml','AppCenterUI.xml','PlaySupport.ui','UI.idx','UI.pak','LoadingWindow.xml','ActionUI.xml','BehaviourUI.xml')
+          foreach($t in $targets){
+            foreach($enc in @([Text.Encoding]::ASCII,[Text.Encoding]::Unicode)){
+              $n=$enc.GetBytes($t);$hits=New-Object Collections.Generic.List[int]
+              for($i=0;$i -le $b.Length-$n.Length;$i++){
+                $ok=$true
+                for($j=0;$j -lt $n.Length;$j++){if($b[$i+$j] -ne $n[$j]){$ok=$false;break}}
+                if($ok){$hits.Add($i);if($hits.Count-ge10){break}}
+              }
+              if($hits.Count){Write-Host ("TARGET {0} {1}: {2}" -f $t,$enc.WebName,($hits -join ','))}
+            }
+          }
+      - name: Dump printable UI-like strings
+        shell: powershell
+        run: |
+          $b=[IO.File]::ReadAllBytes('MJLin.bin')
+          $sb=New-Object Text.StringBuilder
+          $out=New-Object Collections.Generic.List[string]
+          for($i=0;$i-lt$b.Length;$i++){
+            $v=$b[$i]
+            if($v-ge32 -and $v-le126){[void]$sb.Append([char]$v)}
+            else{
+              if($sb.Length-ge6){
+                $s=$sb.ToString()
+                if($s -match '(?i)(\.xml|\.ui|UI\.idx|UI\.pak|AppCenter|PlaySupport|HighRank|MainButton)'){$out.Add($s)}
+              }
+              [void]$sb.Clear()
+            }
+          }
+          $out | Select-Object -Unique -First 500 | ForEach-Object { Write-Host "STR $_" }
