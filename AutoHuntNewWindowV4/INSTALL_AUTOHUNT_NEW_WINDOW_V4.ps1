@@ -53,22 +53,26 @@ function MakeRecord([byte[]]$template,[string]$name,[uint32]$offset,[uint32]$siz
 }
 function UpsertIdx([byte[]]$idx,[string]$name,[uint32]$offset,[uint32]$size,[string]$templateName){
     $entries=@(ParseIdx $idx)
-    $existing=$entries|Where-Object{$_.Name-ieq$name}|Select-Object -First 1
-    if($existing){
-        $out=[byte[]]$idx.Clone()
-        PutU32 $out $existing.Pos $offset;PutU32 $out ($existing.Pos+4) $size;PutU32 $out ($existing.Pos+8) 0;PutU32 $out ($existing.Pos+12) 0
-        return $out
-    }
     $template=$entries|Where-Object{$_.Name-ieq$templateName}|Select-Object -First 1
     if(-not$template){$template=$entries|Select-Object -First 1}
     $items=New-Object Collections.ArrayList
-    foreach($e in $entries){[void]$items.Add([pscustomobject]@{Name=$e.Name;Record=$e.Record})}
-    [void]$items.Add([pscustomobject]@{Name=$name;Record=(MakeRecord $template.Record $name $offset $size)})
+    $done=$false
+    foreach($e in $entries){
+        if($e.Name-ieq$name){
+            if(-not$done){
+                [void]$items.Add([pscustomobject]@{Name=$name;Record=(MakeRecord $template.Record $name $offset $size)})
+                $done=$true
+            }
+            continue
+        }
+        [void]$items.Add([pscustomobject]@{Name=$e.Name;Record=$e.Record})
+    }
+    if(-not$done){[void]$items.Add([pscustomobject]@{Name=$name;Record=(MakeRecord $template.Record $name $offset $size)})}
     $sorted=@($items|Sort-Object {$_.Name.ToLowerInvariant()})
     $out=New-Object byte[] (8+$sorted.Count*128)
     [Array]::Copy($idx,0,$out,0,8);PutU32 $out 4 ([uint32]$sorted.Count)
     for($i=0;$i-lt$sorted.Count;$i++){[Array]::Copy($sorted[$i].Record,0,$out,8+$i*128,128)}
-    $out
+    [byte[]]$out
 }
 
 $key=[byte[]]@(0xdc,0x84,0x01,0x21,0x2a,0x40,0x20,0x0a,0xdd,0x25,0xb9,0xa7,0x0d,0xb9,0xc9,0x4e)
@@ -154,7 +158,8 @@ if(-not$rank -or -not$main){throw "HighRankUI.xml/MainButtonUI.xml not found"}
 $rankDoc=ParseUiDoc $uiPak $rank
 $mainDoc=ParseUiDoc $uiPak $main
 $nativeWindow=$rankDoc.SelectSingleNode("//*[self::Window][1]")
-$nativeButton=$rankDoc.SelectSingleNode("//*[self::Button or self::CheckButton][1]")
+$nativeButton=$rankDoc.SelectSingleNode("//Button[1]")
+if(-not$nativeButton){$nativeButton=$rankDoc.SelectSingleNode("//CheckButton[1]")}
 if(-not$nativeWindow -or -not$nativeButton){throw "Native UI style templates not found"}
 
 # Clean only our older injected test windows from MainButtonUI.
@@ -217,9 +222,23 @@ $uiIdx=[IO.File]::ReadAllBytes($uiIdxPath)
 $uiIdx=UpsertIdx $uiIdx $UiName $off ([uint32]$compiled.Length) "HighRankUI.xml"
 [IO.File]::WriteAllBytes($uiIdxPath,$uiIdx)
 
+# Final integrity checks after all writes.
+$finalUiIdx=[IO.File]::ReadAllBytes($uiIdxPath)
+$finalUiPak=[IO.File]::ReadAllBytes($uiPakPath)
+$finalUiEntry=@(ParseIdx $finalUiIdx)|Where-Object{$_.Name-ieq$UiName}|Select-Object -First 1
+if(-not$finalUiEntry){throw "Final UI index verification failed: $UiName missing"}
+if(([uint64]$finalUiEntry.Offset+[uint64]$finalUiEntry.Size)-gt[uint64]$finalUiPak.Length){throw "Final UI entry points outside UI.pak"}
+
+$finalImgIdx=[IO.File]::ReadAllBytes($imgIdxPath)
+$finalImgPak=[IO.File]::ReadAllBytes($imgPakPath)
+$finalImgEntry=@(ParseIdx $finalImgIdx)|Where-Object{$_.Name-ieq$BgName}|Select-Object -First 1
+if(-not$finalImgEntry){throw "Final image index verification failed: $BgName missing"}
+if(([uint64]$finalImgEntry.Offset+[uint64]$finalImgEntry.Size)-gt[uint64]$finalImgPak.Length){throw "Final image entry points outside Image00.pak"}
+
 # Save the exact generated source for inspection.
 [IO.File]::WriteAllText((Join-Path $backup "AutoHuntSettingsUI.generated.xml"),$out.OuterXml,(New-Object Text.UTF8Encoding($true)))
 
+Ok "INDEX/PAK VERIFY OK"
 Ok "PATCH COMPLETE"
 Ok "New independent UI file: $UiName"
 Ok "New custom UI background: $BgName"
