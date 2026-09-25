@@ -2,6 +2,11 @@ name: Analyze public MJLin UI loader
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+    paths:
+      - '.github/workflows/analyze-public-mjlin.yml'
 
 jobs:
   analyze:
