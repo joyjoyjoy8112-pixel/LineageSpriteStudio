@@ -1,0 +1,21 @@
+name: Validate Standalone AutoHunt UI V3
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+    paths:
+      - 'StandaloneAutoHuntUIV3/**'
+      - '.github/workflows/validate-standalone-v3.yml'
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse with Windows PowerShell 5.1
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -Command
+          "$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'StandaloneAutoHuntUIV3\AUTOHUNT_STANDALONE_UI_V3.ps1'),[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|%%{Write-Host ($_.Extent.StartLineNumber.ToString()+': '+$_.Message)};exit 1}else{Write-Host 'PARSE_OK'}"
