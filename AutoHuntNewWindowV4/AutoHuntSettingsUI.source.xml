@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window Name="AutoHuntSettingsWindow" X="165" Y="135" Width="470" Height="320" Activate="1" Visible="1" MostTop="1" Moveable="12" MouseEvent="Dummy">
+  <Button Name="AH_Background" X="0" Y="0" Width="470" Height="320" Caption="" MouseEvent="Dummy" />
+  <Button Name="AH_Title" X="128" Y="8" Width="214" Height="23" Caption="자동사냥 설정" MouseEvent="Dummy" />
+  <Button Name="AH_Close" X="438" Y="8" Width="20" Height="20" Caption="X" MouseEvent="Dummy" />
+
+  <Button Name="AH_TabBasic" X="16" Y="40" Width="105" Height="22" Caption="기본 설정" MouseEvent="Dummy" />
+  <Button Name="AH_TabMap" X="126" Y="40" Width="105" Height="22" Caption="사냥터 설정" MouseEvent="Dummy" />
+  <Button Name="AH_TabPotion" X="236" Y="40" Width="105" Height="22" Caption="물약 설정" MouseEvent="Dummy" />
+  <Button Name="AH_TabSkill" X="346" Y="40" Width="105" Height="22" Caption="스킬 설정" MouseEvent="Dummy" />
+
+  <Button Name="AH_MapLabel" X="18" Y="78" Width="112" Height="22" Caption="사냥터" MouseEvent="Dummy" />
+  <Button Name="AH_MapValue" X="136" Y="78" Width="174" Height="22" Caption="기란 감옥 1층" MouseEvent="Dummy" />
+  <Button Name="AH_MapPrev" X="314" Y="78" Width="25" Height="22" Caption="&lt;" MouseEvent="Dummy" />
+  <Button Name="AH_MapNext" X="342" Y="78" Width="25" Height="22" Caption="&gt;" MouseEvent="Dummy" />
+
+  <Button Name="AH_PotionLabel" X="18" Y="104" Width="112" Height="22" Caption="사용할 물약" MouseEvent="Dummy" />
+  <Button Name="AH_PotionValue" X="136" Y="104" Width="203" Height="22" Caption="농축 체력 회복제" MouseEvent="Dummy" />
+  <Button Name="AH_PotionNext" X="342" Y="104" Width="25" Height="22" Caption="&gt;" MouseEvent="Dummy" />
+
+  <Button Name="AH_PotionHpLabel" X="18" Y="130" Width="112" Height="22" Caption="물약 사용 HP" MouseEvent="Dummy" />
+  <Button Name="AH_PotionHpMinus" X="136" Y="130" Width="25" Height="22" Caption="-" MouseEvent="Dummy" />
+  <Button Name="AH_PotionHpValue" X="164" Y="130" Width="70" Height="22" Caption="50%" MouseEvent="Dummy" />
+  <Button Name="AH_PotionHpPlus" X="237" Y="130" Width="25" Height="22" Caption="+" MouseEvent="Dummy" />
+
+  <Button Name="AH_ReturnHpLabel" X="18" Y="156" Width="112" Height="22" Caption="귀환 HP" MouseEvent="Dummy" />
+  <Button Name="AH_ReturnHpMinus" X="136" Y="156" Width="25" Height="22" Caption="-" MouseEvent="Dummy" />
+  <Button Name="AH_ReturnHpValue" X="164" Y="156" Width="70" Height="22" Caption="20%" MouseEvent="Dummy" />
+  <Button Name="AH_ReturnHpPlus" X="237" Y="156" Width="25" Height="22" Caption="+" MouseEvent="Dummy" />
+
+  <Button Name="AH_ResumeHpLabel" X="18" Y="182" Width="112" Height="22" Caption="복귀 HP" MouseEvent="Dummy" />
+  <Button Name="AH_ResumeHpMinus" X="136" Y="182" Width="25" Height="22" Caption="-" MouseEvent="Dummy" />
+  <Button Name="AH_ResumeHpValue" X="164" Y="182" Width="70" Height="22" Caption="90%" MouseEvent="Dummy" />
+  <Button Name="AH_ResumeHpPlus" X="237" Y="182" Width="25" Height="22" Caption="+" MouseEvent="Dummy" />
+
+  <Button Name="AH_AutoReturnLabel" X="18" Y="208" Width="112" Height="22" Caption="자동 귀환" MouseEvent="Dummy" />
+  <Button Name="AH_AutoReturnValue" X="136" Y="208" Width="70" Height="22" Caption="사용" MouseEvent="Dummy" />
+  <Button Name="AH_AutoShopLabel" X="214" Y="208" Width="92" Height="22" Caption="자동 상점" MouseEvent="Dummy" />
+  <Button Name="AH_AutoShopValue" X="310" Y="208" Width="57" Height="22" Caption="사용" MouseEvent="Dummy" />
+
+  <Button Name="AH_StatusLabel" X="378" Y="78" Width="74" Height="22" Caption="상태" MouseEvent="Dummy" />
+  <Button Name="AH_StatusValue" X="378" Y="104" Width="74" Height="22" Caption="대기 중" MouseEvent="Dummy" />
+  <Button Name="AH_Attack" X="378" Y="130" Width="74" Height="22" Caption="공격 ON" MouseEvent="Dummy" />
+  <Button Name="AH_Buff" X="378" Y="156" Width="74" Height="22" Caption="버프 ON" MouseEvent="Dummy" />
+  <Button Name="AH_Defense" X="378" Y="182" Width="74" Height="22" Caption="방어 ON" MouseEvent="Dummy" />
+  <Button Name="AH_SkillSelect" X="378" Y="208" Width="74" Height="22" Caption="스킬 선택" MouseEvent="Dummy" />
+
+  <Button Name="AH_Default" X="18" Y="270" Width="92" Height="27" Caption="기본값" MouseEvent="Dummy" />
+  <Button Name="AH_Save" X="116" Y="270" Width="82" Height="27" Caption="저장" MouseEvent="Dummy" />
+  <Button Name="AH_Start" X="204" Y="270" Width="158" Height="27" Caption="자동사냥 시작" MouseEvent="Dummy" />
+  <Button Name="AH_Stop" X="368" Y="270" Width="84" Height="27" Caption="중지" MouseEvent="Dummy" />
+</Window>
