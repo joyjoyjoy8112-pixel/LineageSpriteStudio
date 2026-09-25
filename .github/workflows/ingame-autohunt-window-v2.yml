@@ -1,0 +1,43 @@
+name: Package InGame AutoHunt Window V2
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_ingame_v2 | Out-Null
+          Copy-Item InGameAutoHuntWindowV2\AUTOHUNT_INGAME_WINDOW_V2.ps1 package_ingame_v2\
+          Copy-Item InGameAutoHuntWindow\RESTORE_AUTOHUNT_INGAME_WINDOW_V1.bat package_ingame_v2\
+          @'
+          @echo off
+          title AUTOHUNT INGAME WINDOW V2
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0AUTOHUNT_INGAME_WINDOW_V2.ps1"
+          echo.
+          pause
+          '@ | Set-Content -Encoding ASCII package_ingame_v2\RUN_AUTOHUNT_INGAME_WINDOW_V2.bat
+          @'
+          1. Close the game and launcher.
+          2. Run RESTORE_AUTOHUNT_INGAME_WINDOW_V1.bat first.
+          3. Run RUN_AUTOHUNT_INGAME_WINDOW_V2.bat.
+          4. Wait for PATCH COMPLETE.
+          5. Start the game and enter the world.
+          6. Do not open Character Ranking.
+          V2 fixes the MainButtonUI encoding error from V1.
+          '@ | Set-Content -Encoding UTF8 package_ingame_v2\README.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_INGAME_WINDOW_V2
+          path: package_ingame_v2
+          if-no-files-found: error
