@@ -1,0 +1,31 @@
+name: Build Native AutoHunt UI V1
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish x86 single-file
+        shell: pwsh
+        run: |
+          dotnet publish NativeAutoHuntUI\AutoHuntSettingsUI.csproj -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+          Copy-Item NativeAutoHuntUI\README_사용법.txt publish\README_사용법.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_NATIVE_UI_V1_win-x86
+          path: publish
+          if-no-files-found: error
