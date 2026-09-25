@@ -71,7 +71,7 @@ function Get-Records([byte[]]$idx) {
         [Array]::Copy($idx,8+($i*128),$rec,0,128)
         [void]$list.Add($rec)
     }
-    return $list
+    return ,$list
 }
 
 function Find-Record([byte[]]$idx,[string]$target,[string]$label) {
