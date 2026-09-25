@@ -25,7 +25,7 @@ jobs:
         shell: powershell
         run: |
           [xml]$x = Get-Content -Raw -Encoding UTF8 AutoHuntNewWindowV4\AutoHuntSettingsUI.source.xml
-          if ($x.DocumentElement.Name -ne 'Window') { throw 'Source root is not Window' }
+          if ($x.DocumentElement.LocalName -ne 'Window') { throw 'Source root is not Window' }
           if ($x.Window.Name -ne 'AutoHuntSettingsWindow') { throw 'Window name mismatch' }
           $buttons = @($x.Window.Button)
           if ($buttons.Count -lt 25) { throw "Too few controls: $($buttons.Count)" }
