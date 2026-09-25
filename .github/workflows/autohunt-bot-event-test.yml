@@ -1,0 +1,25 @@
+name: Package AUTO Bot Event Test
+
+on:
+  push:
+    branches:
+      - autohunt-diag20-labels
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_bot | Out-Null
+          Copy-Item tools\autohunt_bot_event_test\AUTO_BOT_EVENT_TEST.ps1 package_bot\
+          Copy-Item tools\autohunt_bot_event_test\RUN_AUTO_BOT_EVENT_TEST.bat package_bot\
+          Copy-Item tools\autohunt_bot_event_test\README.txt package_bot\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTO_BOT_EVENT_TEST
+          path: package_bot
+          if-no-files-found: error
