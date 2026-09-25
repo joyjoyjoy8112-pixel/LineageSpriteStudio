@@ -1,0 +1,26 @@
+name: Package AutoHunt UI Stage1
+
+on:
+  push:
+    branches:
+      - autohunt-diag20-labels
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_stage1 | Out-Null
+          Copy-Item tools\autohunt_ui_stage1\AUTOHUNT_UI_STAGE1.ps1 package_stage1\
+          Copy-Item tools\autohunt_ui_stage1\RUN_AUTOHUNT_UI_STAGE1.bat package_stage1\
+          Copy-Item tools\autohunt_ui_stage1\RESTORE_AUTOHUNT_UI_STAGE1.bat package_stage1\
+          Copy-Item tools\autohunt_ui_stage1\README.txt package_stage1\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_UI_STAGE1
+          path: package_stage1
+          if-no-files-found: error
