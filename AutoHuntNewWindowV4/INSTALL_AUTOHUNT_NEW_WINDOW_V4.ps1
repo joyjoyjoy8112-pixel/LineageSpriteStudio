@@ -180,13 +180,13 @@ $src=New-Object Xml.XmlDocument
 $src.PreserveWhitespace=$false
 $src.LoadXml([IO.File]::ReadAllText($LayoutPath,[Text.Encoding]::UTF8))
 $srcWin=$src.DocumentElement
-if($srcWin.Name-ne"Window"){throw "Source root must be Window"}
+if($srcWin.LocalName-ne"Window"){throw "Source root must be Window"}
 
 # Build a brand-new client UI document using our layout.
 $out=New-Object Xml.XmlDocument
 $out.PreserveWhitespace=$false
-if($rankDoc.DocumentElement.Name-ne"Window"){
-    $root=$out.CreateElement($rankDoc.DocumentElement.Name)
+if($rankDoc.DocumentElement.LocalName-ne"Window"){
+    $root=$out.CreateElement($rankDoc.DocumentElement.LocalName)
     foreach($a in @($rankDoc.DocumentElement.Attributes)){$na=$out.CreateAttribute($a.Name);$na.Value=$a.Value;[void]$root.Attributes.Append($na)}
     [void]$out.AppendChild($root)
 }else{$root=$null}
@@ -198,7 +198,7 @@ if($root){[void]$root.AppendChild($w)}else{[void]$out.AppendChild($w)}
 
 foreach($s in @($srcWin.ChildNodes)){
     if($s.NodeType-ne[Xml.XmlNodeType]::Element){continue}
-    $b=$out.CreateElement($nativeButton.Name)
+    $b=$out.CreateElement($nativeButton.LocalName)
     foreach($a in @($nativeButton.Attributes)){$na=$out.CreateAttribute($a.Name);$na.Value=$a.Value;[void]$b.Attributes.Append($na)}
     foreach($a in @($s.Attributes)){SetA $b $a.Name $a.Value}
     SetA $b "Activate" "1";SetA $b "Visible" "1"
