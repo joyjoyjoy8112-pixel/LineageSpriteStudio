@@ -45,7 +45,7 @@ jobs:
           Copy-Item AutoHuntNewWindowV4\config.json package_v4\
           Copy-Item AutoHuntNewWindowV4\INSTALL_AUTOHUNT_NEW_WINDOW_V4.ps1 package_v4\
           Copy-Item AutoHuntNewWindowV4\UPDATE_AUTOHUNT_V4.bat package_v4\
-          Copy-Item AutoHuntNewWindowV4\README_사용법.txt package_v4\
+          Copy-Item AutoHuntNewWindowV4\*.txt package_v4\
 
       - uses: actions/upload-artifact@v4
         with:
