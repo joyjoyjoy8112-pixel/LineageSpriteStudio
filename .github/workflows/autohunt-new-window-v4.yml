@@ -1,0 +1,54 @@
+name: Package AutoHunt New Window V4 Validated
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+    paths:
+      - 'AutoHuntNewWindowV4/**'
+      - '.github/workflows/autohunt-new-window-v4.yml'
+
+jobs:
+  validate-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate installer with Windows PowerShell 5.1
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -Command
+          "$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'AutoHuntNewWindowV4\INSTALL_AUTOHUNT_NEW_WINDOW_V4.ps1'),[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|%%{Write-Host ($_.Extent.StartLineNumber.ToString()+': '+$_.Message)};exit 1}else{Write-Host 'POWERSHELL_5_1_PARSE_OK'}"
+
+      - name: Validate source XML and config
+        shell: powershell
+        run: |
+          [xml]$x = Get-Content -Raw -Encoding UTF8 AutoHuntNewWindowV4\AutoHuntSettingsUI.source.xml
+          if ($x.DocumentElement.Name -ne 'Window') { throw 'Source root is not Window' }
+          if ($x.Window.Name -ne 'AutoHuntSettingsWindow') { throw 'Window name mismatch' }
+          $buttons = @($x.Window.Button)
+          if ($buttons.Count -lt 25) { throw "Too few controls: $($buttons.Count)" }
+          if (@($buttons | Where-Object { $_.Name -eq 'AH_Background' }).Count -ne 1) { throw 'Background control missing' }
+          if (@($buttons | Where-Object { $_.Name -eq 'AH_Start' }).Count -ne 1) { throw 'Start control missing' }
+          if (@($buttons | Where-Object { $_.Name -eq 'AH_Save' }).Count -ne 1) { throw 'Save control missing' }
+          $cfg = Get-Content -Raw -Encoding UTF8 AutoHuntNewWindowV4\config.json | ConvertFrom-Json
+          if ($cfg.clientPath -ne 'D:\리니지1\리니지클라\클라') { throw 'Client path mismatch' }
+          if ($cfg.uiFileName -ne 'AutoHuntSettingsUI.xml') { throw 'UI filename mismatch' }
+          Write-Host 'SOURCE_XML_CONFIG_OK'
+
+      - name: Prepare release package
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force package_v4 | Out-Null
+          Copy-Item AutoHuntNewWindowV4\AutoHuntSettingsUI.source.xml package_v4\
+          Copy-Item AutoHuntNewWindowV4\config.json package_v4\
+          Copy-Item AutoHuntNewWindowV4\INSTALL_AUTOHUNT_NEW_WINDOW_V4.ps1 package_v4\
+          Copy-Item AutoHuntNewWindowV4\UPDATE_AUTOHUNT_V4.bat package_v4\
+          Copy-Item AutoHuntNewWindowV4\README_사용법.txt package_v4\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_NEW_WINDOW_V4_VALIDATED
+          path: package_v4
+          if-no-files-found: error
