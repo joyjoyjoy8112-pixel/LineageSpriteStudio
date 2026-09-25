@@ -304,7 +304,13 @@ function Test-UiResources(
         }
     }
 
-    return ,$missing
+    if ($missing.Count -eq 0) {
+        return
+    }
+
+    foreach ($item in $missing) {
+        Write-Output ([string]$item)
+    }
 }
 
 function Prepare-AutoHuntXml([string]$Text) {
