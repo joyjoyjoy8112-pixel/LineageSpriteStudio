@@ -1,0 +1,26 @@
+name: Package InGame AutoHunt Window V1
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_ingame | Out-Null
+          Copy-Item InGameAutoHuntWindow\AUTOHUNT_INGAME_WINDOW_V1.ps1 package_ingame\
+          Copy-Item InGameAutoHuntWindow\RUN_AUTOHUNT_INGAME_WINDOW_V1.bat package_ingame\
+          Copy-Item InGameAutoHuntWindow\RESTORE_AUTOHUNT_INGAME_WINDOW_V1.bat package_ingame\
+          Copy-Item InGameAutoHuntWindow\README_사용법.txt package_ingame\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_INGAME_WINDOW_V1
+          path: package_ingame
+          if-no-files-found: error
