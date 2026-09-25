@@ -1,0 +1,31 @@
+name: Package AutoHunt Auto Patch V2
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package_real | Out-Null
+          New-Item -ItemType Directory -Force -Path package_real\tools | Out-Null
+          Copy-Item AutoHuntAutoPatchV2\APPLY_AUTOHUNT_PATCH.ps1 package_real\
+          Copy-Item AutoHuntAutoPatchV2\UPDATE_AUTOHUNT.bat package_real\
+          Copy-Item AutoHuntAutoPatchV2\README_사용법.txt package_real\
+          Copy-Item AutoHuntPatchUpdater\config.json package_real\
+          Copy-Item InGameAutoHuntWindowV2\AUTOHUNT_INGAME_WINDOW_V2.ps1 package_real\tools\
+          Copy-Item InGameAutoHuntWindow\RESTORE_AUTOHUNT_INGAME_WINDOW_V1.bat package_real\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AUTOHUNT_AUTO_PATCH_V2_REAL
+          path: package_real
+          if-no-files-found: error
