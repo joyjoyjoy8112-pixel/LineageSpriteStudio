@@ -1,0 +1,30 @@
+name: Package AUTO Diag20 Patcher
+
+on:
+  push:
+    branches:
+      - autohunt-diag20-labels
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item tools\autohunt_diag20\AUTO_DIAG20_PATCH.ps1 package\
+          Copy-Item tools\autohunt_diag20\apply_auto_diag20.bat package\
+          Copy-Item tools\autohunt_diag20\README_사용법.txt package\
+          Get-ChildItem package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AUTO_1-20_29999_UI_Number_Diagnostic
+          path: package
+          if-no-files-found: error
