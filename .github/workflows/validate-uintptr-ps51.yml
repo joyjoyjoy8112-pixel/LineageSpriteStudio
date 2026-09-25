@@ -1,0 +1,20 @@
+name: Validate UIntPtr PowerShell 5.1
+
+on:
+  push:
+    branches:
+      - native-autohunt-ui-v1
+    paths:
+      - 'ValidationUIntPtr/**'
+      - '.github/workflows/validate-uintptr-ps51.yml'
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run UIntPtr test with Windows PowerShell 5.1
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+          "ValidationUIntPtr\TEST_UINTPTR.ps1"
