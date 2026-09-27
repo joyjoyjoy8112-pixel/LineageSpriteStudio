@@ -94,6 +94,9 @@ internal sealed class ClientInspectorForm : Form
     private readonly Label lblSpr = new() { AutoSize = true, Left = 182, Top = 11 };
 
     private readonly ToolStripStatusLabel status = new() { Text = "준비" };
+    private readonly ToolStripStatusLabel statusClient = new() { Text = "클라: 대기" };
+    private readonly ToolStripStatusLabel statusServer = new() { Text = "서버: 대기" };
+    private readonly ToolStripStatusLabel statusDb = new() { Text = "DB: 대기" };
     private readonly ToolStripProgressBar progress = new() { Minimum = 0, Maximum = 100, Width = 180 };
 
     private readonly List<ViewRow> allRows = new();
@@ -124,7 +127,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.3 - 원본 수정/복원";
+        Text = "Lineage Client Inspector V2.4 - 검색 위치 실시간 표시";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -182,6 +185,12 @@ internal sealed class ClientInspectorForm : Form
         var statusStrip = new StatusStrip();
         statusStrip.Items.Add(status);
         statusStrip.Items.Add(new ToolStripStatusLabel { Spring = true });
+        statusStrip.Items.Add(statusClient);
+        statusStrip.Items.Add(new ToolStripSeparator());
+        statusStrip.Items.Add(statusServer);
+        statusStrip.Items.Add(new ToolStripSeparator());
+        statusStrip.Items.Add(statusDb);
+        statusStrip.Items.Add(new ToolStripSeparator());
         statusStrip.Items.Add(progress);
 
         Controls.Add(split);
@@ -935,6 +944,7 @@ internal sealed class ClientInspectorForm : Form
             globalSearchResults = null;
             ApplyFilter();
             status.Text = "통합 검색 초기화";
+            ResetSearchSourceStatus();
             return;
         }
 
@@ -947,90 +957,56 @@ internal sealed class ClientInspectorForm : Form
 
         const int MaxResults = 500;
         SetBusy(true, $"정확 통합 검색 중: {q}");
+        ResetSearchSourceStatus();
 
         try
         {
             var results = new List<ViewRow>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool truncated = false;
+            bool shortNumeric = q.All(char.IsDigit) && q.Length <= 3;
 
-            void AddResult(ViewRow row)
+            int clientHits = 0;
+            int serverHits = 0;
+            int dbHits = 0;
+
+            void AddResult(ViewRow row, string area)
             {
                 string key = row.Source + "\n" + row.Path + "\n" + row.Container + "\n" + row.Match;
                 if (!seen.Add(key)) return;
 
                 if (results.Count < MaxResults)
+                {
                     results.Add(row);
+
+                    if (area == "클라") clientHits++;
+                    else if (area == "서버") serverHits++;
+                    else if (area == "DB") dbHits++;
+                }
                 else
+                {
                     truncated = true;
+                }
             }
 
-            bool shortNumeric = q.All(char.IsDigit) && q.Length <= 3;
-
-            if (!shortNumeric)
+            async Task SearchRowsPhaseAsync(List<ViewRow> rows, string area)
             {
-                var pscRows = allRows
-                    .Where(r => r.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase) &&
-                                (r.Source == "DB백업" || r.Source == "서버팩"))
-                    .ToList();
+                int total = rows.Count;
+                int done = 0;
 
-                foreach (var psc in pscRows)
+                SetSourceSearching(area, clientHits, serverHits, dbHits);
+                Application.DoEvents();
+
+                foreach (var row in rows)
                 {
-                    var pscHits = await SearchPscAsync(psc, q, Math.Min(50, MaxResults - results.Count));
-                    foreach (var hit in pscHits)
-                        AddResult(hit);
-
                     if (results.Count >= MaxResults)
                     {
                         truncated = true;
                         break;
                     }
 
-                    if (pscHits.Count > 0)
-                    {
-                        status.Text = $"PSC 정확 검색: {psc.Path} | 발견 {results.Count:N0}";
-                        Application.DoEvents();
-                    }
-                }
-            }
-
-            var sqlBackups = shortNumeric
-                ? new List<ViewRow>()
-                : allRows
-                    .Where(r => r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-            foreach (var sql in sqlBackups)
-            {
-                var sqlMatches = await Task.Run(() => SearchSqlDump(sql.SourceKey, q, MaxResults - results.Count));
-                foreach (var hit in sqlMatches)
-                    AddResult(hit);
-
-                if (results.Count >= MaxResults)
-                {
-                    truncated = true;
-                    break;
-                }
-
-                status.Text = $"DB 정확 검색: {Path.GetFileName(sql.SourceKey)} | 발견 {results.Count:N0}";
-                Application.DoEvents();
-            }
-
-            if (results.Count < MaxResults)
-            {
-                var searchableRows = allRows
-                    .Where(r => !(r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase)))
-                    .ToList();
-
-                int total = searchableRows.Count;
-                int done = 0;
-
-                foreach (var row in searchableRows)
-                {
                     string? match = null;
 
-                    // 경로 전체/확장자/컨테이너는 검색하지 않는다.
-                    // 사용자가 실제로 보는 파일명 또는 내부 파일명에만 적용한다.
                     if (StrictContains(row.Path, q))
                     {
                         match = "파일명";
@@ -1047,7 +1023,67 @@ internal sealed class ClientInspectorForm : Form
                     if (match != null)
                     {
                         row.Match = match;
-                        AddResult(row);
+                        AddResult(row, area);
+                    }
+
+                    done++;
+                    if (done % 100 == 0 || done == total)
+                    {
+                        progress.Value = total == 0 ? 0 : Math.Min(100, (int)(done * 100L / total));
+                        status.Text = $"{area} 검색 {done:N0}/{total:N0} | 전체 발견 {results.Count:N0}";
+                        UpdateSourceHitDisplay(area, clientHits, serverHits, dbHits);
+                        Application.DoEvents();
+                    }
+                }
+
+                SetSourceCompleted(area, clientHits, serverHits, dbHits);
+                Application.DoEvents();
+            }
+
+            // 1) Navicat / DB 백업
+            SetSourceSearching("DB", clientHits, serverHits, dbHits);
+            Application.DoEvents();
+
+            if (!shortNumeric)
+            {
+                var dbPscRows = allRows
+                    .Where(r => r.Source == "DB백업" &&
+                                r.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var psc in dbPscRows)
+                {
+                    var pscHits = await SearchPscAsync(psc, q, Math.Min(50, MaxResults - results.Count));
+                    foreach (var hit in pscHits)
+                        AddResult(hit, "DB");
+
+                    status.Text = $"DB PSC 검색: {psc.Path} | DB 발견 {dbHits:N0}";
+                    UpdateSourceHitDisplay("DB", clientHits, serverHits, dbHits);
+                    Application.DoEvents();
+
+                    if (results.Count >= MaxResults)
+                    {
+                        truncated = true;
+                        break;
+                    }
+                }
+
+                if (results.Count < MaxResults)
+                {
+                    var sqlBackups = allRows
+                        .Where(r => r.Source == "DB백업" &&
+                                    r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var sql in sqlBackups)
+                    {
+                        var sqlMatches = await Task.Run(() => SearchSqlDump(sql.SourceKey, q, MaxResults - results.Count));
+                        foreach (var hit in sqlMatches)
+                            AddResult(hit, "DB");
+
+                        status.Text = $"DB SQL 검색: {Path.GetFileName(sql.SourceKey)} | DB 발견 {dbHits:N0}";
+                        UpdateSourceHitDisplay("DB", clientHits, serverHits, dbHits);
+                        Application.DoEvents();
 
                         if (results.Count >= MaxResults)
                         {
@@ -1055,15 +1091,78 @@ internal sealed class ClientInspectorForm : Form
                             break;
                         }
                     }
+                }
+            }
 
-                    done++;
-                    if (done % 100 == 0 || done == total)
+            if (results.Count < MaxResults)
+            {
+                var dbRows = allRows
+                    .Where(r => r.Source == "DB백업" || r.Source == "PSC 내부")
+                    .Where(r => !(r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase)))
+                    .Where(r => !(r.Source == "DB백업" && r.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                await SearchRowsPhaseAsync(dbRows, "DB");
+            }
+            else
+            {
+                SetSourceCompleted("DB", clientHits, serverHits, dbHits);
+            }
+
+            // 2) 서버팩 폴더
+            if (results.Count < MaxResults)
+            {
+                SetSourceSearching("서버", clientHits, serverHits, dbHits);
+                Application.DoEvents();
+
+                if (!shortNumeric)
+                {
+                    var serverPscRows = allRows
+                        .Where(r => r.Source == "서버팩" &&
+                                    r.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var psc in serverPscRows)
                     {
-                        progress.Value = total == 0 ? 0 : Math.Min(100, (int)(done * 100L / total));
-                        status.Text = $"정확 통합 검색 {done:N0}/{total:N0} | 발견 {results.Count:N0}";
+                        var pscHits = await SearchPscAsync(psc, q, Math.Min(50, MaxResults - results.Count));
+                        foreach (var hit in pscHits)
+                            AddResult(hit, "서버");
+
+                        status.Text = $"서버 PSC 검색: {psc.Path} | 서버 발견 {serverHits:N0}";
+                        UpdateSourceHitDisplay("서버", clientHits, serverHits, dbHits);
                         Application.DoEvents();
+
+                        if (results.Count >= MaxResults)
+                        {
+                            truncated = true;
+                            break;
+                        }
                     }
                 }
+
+                if (results.Count < MaxResults)
+                {
+                    var serverRows = allRows
+                        .Where(r => r.Source == "서버팩")
+                        .Where(r => !r.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    await SearchRowsPhaseAsync(serverRows, "서버");
+                }
+                else
+                {
+                    SetSourceCompleted("서버", clientHits, serverHits, dbHits);
+                }
+            }
+
+            // 3) 클라이언트 + PAK 내부
+            if (results.Count < MaxResults)
+            {
+                var clientRows = allRows
+                    .Where(r => r.Source == "실제파일" || r.Source == "PAK 내부")
+                    .ToList();
+
+                await SearchRowsPhaseAsync(clientRows, "클라");
             }
 
             globalSearchResults = results;
@@ -1071,24 +1170,79 @@ internal sealed class ClientInspectorForm : Form
 
             if (shortNumeric)
             {
-                status.Text = $"정확 검색 완료: '{q}' → {results.Count:N0}건 | 1~3자리 숫자는 DB/본문 검색 제외";
+                status.Text =
+                    $"정확 검색 완료: '{q}' → {results.Count:N0}건 | " +
+                    $"클라 {clientHits:N0} / 서버 {serverHits:N0} / DB {dbHits:N0} | " +
+                    "1~3자리 숫자는 DB/본문 검색 제외";
             }
             else
             {
                 status.Text = truncated
-                    ? $"정확 검색: '{q}' → {results.Count:N0}건 표시 (500건 초과, 검색어를 더 구체화하세요)"
-                    : $"정확 검색 완료: '{q}' → {results.Count:N0}건";
+                    ? $"정확 검색: '{q}' → {results.Count:N0}건 표시 | 클라 {clientHits:N0} / 서버 {serverHits:N0} / DB {dbHits:N0} | 500건 초과"
+                    : $"정확 검색 완료: '{q}' → {results.Count:N0}건 | 클라 {clientHits:N0} / 서버 {serverHits:N0} / DB {dbHits:N0}";
             }
+
+            FinishSearchSourceStatus(clientHits, serverHits, dbHits);
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.ToString(), "통합 검색 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
             status.Text = "통합 검색 실패";
+            statusClient.Text = "클라: 오류";
+            statusServer.Text = "서버: 오류";
+            statusDb.Text = "DB: 오류";
         }
         finally
         {
             SetBusy(false);
         }
+    }
+
+    private void ResetSearchSourceStatus()
+    {
+        bool hasClient = allRows.Any(r => r.Source == "실제파일" || r.Source == "PAK 내부");
+        bool hasServer = allRows.Any(r => r.Source == "서버팩");
+        bool hasDb = allRows.Any(r => r.Source == "DB백업" || r.Source == "PSC 내부");
+
+        statusClient.Text = hasClient ? "클라: 대기" : "클라: 미선택";
+        statusServer.Text = hasServer ? "서버: 대기" : "서버: 미선택";
+        statusDb.Text = hasDb ? "DB: 대기" : "DB: 미선택";
+    }
+
+    private void SetSourceSearching(string area, int clientHits, int serverHits, int dbHits)
+    {
+        if (area == "클라")
+            statusClient.Text = $"클라: 검색중... ({clientHits:N0})";
+        else if (area == "서버")
+            statusServer.Text = $"서버: 검색중... ({serverHits:N0})";
+        else if (area == "DB")
+            statusDb.Text = $"DB: 검색중... ({dbHits:N0})";
+    }
+
+    private void UpdateSourceHitDisplay(string area, int clientHits, int serverHits, int dbHits)
+    {
+        SetSourceSearching(area, clientHits, serverHits, dbHits);
+    }
+
+    private void SetSourceCompleted(string area, int clientHits, int serverHits, int dbHits)
+    {
+        if (area == "클라")
+            statusClient.Text = $"클라: 완료 {clientHits:N0}건";
+        else if (area == "서버")
+            statusServer.Text = $"서버: 완료 {serverHits:N0}건";
+        else if (area == "DB")
+            statusDb.Text = $"DB: 완료 {dbHits:N0}건";
+    }
+
+    private void FinishSearchSourceStatus(int clientHits, int serverHits, int dbHits)
+    {
+        bool hasClient = allRows.Any(r => r.Source == "실제파일" || r.Source == "PAK 내부");
+        bool hasServer = allRows.Any(r => r.Source == "서버팩");
+        bool hasDb = allRows.Any(r => r.Source == "DB백업" || r.Source == "PSC 내부");
+
+        statusClient.Text = hasClient ? $"클라: 완료 {clientHits:N0}건" : "클라: 미선택";
+        statusServer.Text = hasServer ? $"서버: 완료 {serverHits:N0}건" : "서버: 미선택";
+        statusDb.Text = hasDb ? $"DB: 완료 {dbHits:N0}건" : "DB: 미선택";
     }
 
     private async Task<List<ViewRow>> SearchPscAsync(ViewRow sourceRow, string query, int limit)
