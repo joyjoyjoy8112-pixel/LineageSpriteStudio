@@ -113,7 +113,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V1.8 - 클라 + DB 행 통합 검색";
+        Text = "Lineage Client Inspector V1.9 - 정확 통합 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -494,11 +494,32 @@ internal sealed class ClientInspectorForm : Form
             return;
         }
 
-        SetBusy(true, $"통합 검색 중: {q}");
+        if (q.Length == 1 && !char.IsDigit(q[0]))
+        {
+            MessageBox.Show(this, "한 글자 텍스트 검색은 잡결과가 너무 많아 제외했습니다.\n두 글자 이상 입력하세요.",
+                "정확 검색", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        const int MaxResults = 500;
+        SetBusy(true, $"정확 통합 검색 중: {q}");
 
         try
         {
             var results = new List<ViewRow>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool truncated = false;
+
+            void AddResult(ViewRow row)
+            {
+                string key = row.Source + "\n" + row.Path + "\n" + row.Container + "\n" + row.Match;
+                if (!seen.Add(key)) return;
+
+                if (results.Count < MaxResults)
+                    results.Add(row);
+                else
+                    truncated = true;
+            }
 
             var sqlBackups = allRows
                 .Where(r => r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase))
@@ -506,59 +527,76 @@ internal sealed class ClientInspectorForm : Form
 
             foreach (var sql in sqlBackups)
             {
-                var sqlMatches = await Task.Run(() => SearchSqlDump(sql.SourceKey, q));
-                results.AddRange(sqlMatches);
-                status.Text = $"SQL 검색: {Path.GetFileName(sql.SourceKey)} | 발견 {results.Count:N0}";
+                var sqlMatches = await Task.Run(() => SearchSqlDump(sql.SourceKey, q, MaxResults - results.Count));
+                foreach (var hit in sqlMatches)
+                    AddResult(hit);
+
+                if (results.Count >= MaxResults)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                status.Text = $"DB 정확 검색: {Path.GetFileName(sql.SourceKey)} | 발견 {results.Count:N0}";
                 Application.DoEvents();
             }
 
-            var searchableRows = allRows
-                .Where(r => !(r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            int total = searchableRows.Count;
-            int done = 0;
-
-            foreach (var row in searchableRows)
+            if (results.Count < MaxResults)
             {
-                string? match = null;
+                var searchableRows = allRows
+                    .Where(r => !(r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
 
-                if (row.Path.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    row.Container.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    row.Extension.Contains(q, StringComparison.OrdinalIgnoreCase))
-                {
-                    match = "파일명/경로";
-                }
-                else if (!string.IsNullOrEmpty(row.SearchText) &&
-                         row.SearchText.Contains(q, StringComparison.OrdinalIgnoreCase))
-                {
-                    match = "미리색인 내용";
-                }
-                else if (ShouldContentSearch(row))
-                {
-                    long offset = await FindContentOffsetAsync(row, q);
-                    if (offset >= 0)
-                        match = $"텍스트 내용 @ 0x{offset:X}";
-                }
+                int total = searchableRows.Count;
+                int done = 0;
 
-                if (match != null)
+                foreach (var row in searchableRows)
                 {
-                    row.Match = match;
-                    results.Add(row);
-                }
+                    string? match = null;
 
-                done++;
-                if (done % 50 == 0 || done == total)
-                {
-                    progress.Value = total == 0 ? 0 : Math.Min(100, (int)(done * 100L / total));
-                    status.Text = $"통합 검색 {done:N0}/{total:N0} | 발견 {results.Count:N0}";
-                    Application.DoEvents();
+                    // 경로 전체/확장자/컨테이너는 검색하지 않는다.
+                    // 사용자가 실제로 보는 파일명 또는 내부 파일명에만 적용한다.
+                    if (StrictContains(row.Path, q))
+                    {
+                        match = "파일명";
+                    }
+                    else if (!string.IsNullOrEmpty(row.SearchText) && StrictContains(row.SearchText, q))
+                    {
+                        match = "의미있는 내용";
+                    }
+                    else if (ShouldContentSearch(row) && await TextContentContainsAsync(row, q))
+                    {
+                        match = "텍스트 내용";
+                    }
+
+                    if (match != null)
+                    {
+                        row.Match = match;
+                        AddResult(row);
+
+                        if (results.Count >= MaxResults)
+                        {
+                            truncated = true;
+                            break;
+                        }
+                    }
+
+                    done++;
+                    if (done % 100 == 0 || done == total)
+                    {
+                        progress.Value = total == 0 ? 0 : Math.Min(100, (int)(done * 100L / total));
+                        status.Text = $"정확 통합 검색 {done:N0}/{total:N0} | 발견 {results.Count:N0}";
+                        Application.DoEvents();
+                    }
                 }
             }
 
             globalSearchResults = results;
             ApplyFilter();
-            status.Text = $"통합 검색 완료: '{q}' → {results.Count:N0}건";
+
+            status.Text = truncated
+                ? $"정확 검색: '{q}' → {results.Count:N0}건 표시 (500건 초과, 검색어를 더 구체화하세요)"
+                : $"정확 검색 완료: '{q}' → {results.Count:N0}건";
         }
         catch (Exception ex)
         {
@@ -571,10 +609,10 @@ internal sealed class ClientInspectorForm : Form
         }
     }
 
-    private static List<ViewRow> SearchSqlDump(string path, string query)
+    private static List<ViewRow> SearchSqlDump(string path, string query, int limit)
     {
         var results = new List<ViewRow>();
-        if (!File.Exists(path) || string.IsNullOrWhiteSpace(query))
+        if (!File.Exists(path) || string.IsNullOrWhiteSpace(query) || limit <= 0)
             return results;
 
         int lineNo = 0;
@@ -584,14 +622,16 @@ internal sealed class ClientInspectorForm : Form
         while (sr.ReadLine() is string line)
         {
             lineNo++;
-
-            if (!line.Contains(query, StringComparison.OrdinalIgnoreCase))
-                continue;
-
             string trimmed = line.TrimStart();
 
-            if (trimmed.StartsWith("INSERT INTO ", StringComparison.OrdinalIgnoreCase))
+            bool isInsert = trimmed.StartsWith("INSERT INTO ", StringComparison.OrdinalIgnoreCase) ||
+                            trimmed.StartsWith("REPLACE INTO ", StringComparison.OrdinalIgnoreCase);
+
+            if (isInsert)
             {
+                if (!StrictContains(line, query))
+                    continue;
+
                 string table = ExtractSqlTableName(trimmed);
 
                 results.Add(new ViewRow
@@ -604,30 +644,84 @@ internal sealed class ClientInspectorForm : Form
                     SizeBytes = Encoding.UTF8.GetByteCount(line),
                     SourceKey = path,
                     SearchText = line,
-                    Match = $"DB 행 | {table} | line {lineNo:N0}"
+                    Match = $"DB 실제값 | {table} | line {lineNo:N0}"
                 });
             }
-            else
+            else if (trimmed.StartsWith("CREATE TABLE ", StringComparison.OrdinalIgnoreCase))
             {
+                string table = ExtractSqlTableName(trimmed);
+                if (string.IsNullOrWhiteSpace(table) ||
+                    !table.Equals(query, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 results.Add(new ViewRow
                 {
                     Source = "DB SQL",
                     Type = "DB백업",
-                    Path = $"SQL line {lineNo:N0}",
-                    Container = Path.GetFileName(path),
+                    Path = table,
+                    Container = $"{Path.GetFileName(path)} | line {lineNo:N0}",
                     Extension = ".sql",
                     SizeBytes = Encoding.UTF8.GetByteCount(line),
                     SourceKey = path,
                     SearchText = line,
-                    Match = $"DB SQL 텍스트 | line {lineNo:N0}"
+                    Match = $"DB 테이블명 정확일치 | line {lineNo:N0}"
                 });
             }
+            else
+            {
+                continue;
+            }
 
-            if (results.Count >= 10000)
+            if (results.Count >= limit)
                 break;
         }
 
         return results;
+    }
+
+    private static bool StrictContains(string text, string query)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(query))
+            return false;
+
+        bool numeric = query.All(char.IsDigit);
+        int start = 0;
+
+        while (start <= text.Length - query.Length)
+        {
+            int idx = text.IndexOf(query, start, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return false;
+
+            if (!numeric)
+                return true;
+
+            bool leftOk = idx == 0 || !char.IsDigit(text[idx - 1]);
+            int after = idx + query.Length;
+            bool rightOk = after >= text.Length || !char.IsDigit(text[after]);
+
+            if (leftOk && rightOk)
+                return true;
+
+            start = idx + 1;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> TextContentContainsAsync(ViewRow row, string query)
+    {
+        try
+        {
+            byte[] data = await ReadBytesAsync(row);
+
+            // 텍스트 파일만 이 경로로 들어온다. 바이너리 HEX는 검색하지 않는다.
+            var decoded = DecodeText(data);
+            return StrictContains(decoded.Text, query);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string ExtractSqlTableName(string line)
