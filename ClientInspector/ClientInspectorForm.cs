@@ -182,7 +182,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V3.2 - EXT PAK SPR 저장";
+        Text = "Lineage Client Inspector V3.3 - EXT Flags1 SPR 저장검증";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -2479,7 +2479,7 @@ internal sealed class ClientInspectorForm : Form
             {
                 throw new InvalidOperationException(
                     $"현재 PAK 형식은 {scanner.Format}{(scanner.DesEncrypted ? " / DES" : "")} 입니다. " +
-                    "V3.2에서는 비암호화 LEGACY28 및 비암호화 _EXT PAK의 SPR 저장을 지원합니다.");
+                    "V3.3에서는 비암호화 LEGACY28 및 비암호화 _EXT PAK의 SPR 저장을 지원합니다.");
             }
 
             string pakPath = Path.ChangeExtension(idxPath, ".pak");
@@ -2490,12 +2490,48 @@ internal sealed class ClientInspectorForm : Form
             File.Copy(idxPath, idxBackup, false);
             File.Copy(pakPath, pakBackup, false);
 
-            using (var pak = new SpritePak(idxPath))
+            try
             {
-                pak.RebuildPak(new Dictionary<string, byte[]>
+                using (var pak = new SpritePak(idxPath))
                 {
-                    [currentRow.Path] = storedSpr
-                });
+                    pak.RebuildPak(new Dictionary<string, byte[]>
+                    {
+                        [currentRow.Path] = storedSpr
+                    });
+                }
+
+                // RebuildPak 내부 검증에 더해 Inspector에서도 다시 추출하여 최종 바이트를 확인한다.
+                using (var verify = new AnyPakScanner(idxPath))
+                {
+                    var verifyEntry = verify.Entries.FirstOrDefault(x =>
+                        x.FileName.Equals(currentRow.Path, StringComparison.OrdinalIgnoreCase));
+
+                    if (verifyEntry == null)
+                        throw new InvalidDataException("저장 후 SPR 엔트리를 다시 찾지 못했습니다.");
+
+                    byte[] verifyBytes = verify.Extract(verifyEntry);
+                    if (!verifyBytes.AsSpan().SequenceEqual(storedSpr))
+                    {
+                        throw new InvalidDataException(
+                            $"저장 후 SPR 검증 실패: expected={storedSpr.Length:N0}, actual={verifyBytes.Length:N0}");
+                    }
+                }
+            }
+            catch
+            {
+                // 검증/저장 중 하나라도 실패하면 방금 만든 백업으로 IDX/PAK를 자동 복원한다.
+                try { File.Copy(idxBackup, idxPath, true); } catch { }
+                try { File.Copy(pakBackup, pakPath, true); } catch { }
+
+                try
+                {
+                    scanner.Dispose();
+                    scanners[idxPath] = new AnyPakScanner(idxPath);
+                }
+                catch { }
+
+                status.Text = "SPR 저장 실패 - IDX/PAK 자동 복원 완료";
+                throw;
             }
 
             scanner.Dispose();
@@ -2507,7 +2543,7 @@ internal sealed class ClientInspectorForm : Form
             grid.Refresh();
 
             status.Text =
-                $"PAK SPR 저장 완료: {currentRow.Path} | IDX/PAK 백업 생성 완료";
+                $"PAK SPR 저장/검증 완료: {currentRow.Path} | IDX/PAK 백업 생성 완료";
             return;
         }
 
