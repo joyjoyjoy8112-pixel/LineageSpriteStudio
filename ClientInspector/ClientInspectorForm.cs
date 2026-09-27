@@ -91,8 +91,12 @@ internal sealed class ClientInspectorForm : Form
     };
 
     private readonly Panel sprBar = new() { Dock = DockStyle.Bottom, Height = 42, Visible = false };
-    private readonly NumericUpDown numSprFrame = new() { Minimum = 0, Maximum = 0, Width = 100, Left = 70, Top = 8 };
-    private readonly Label lblSpr = new() { AutoSize = true, Left = 182, Top = 11 };
+    private readonly NumericUpDown numSprFrame = new() { Minimum = 0, Maximum = 0, Width = 88, Left = 70, Top = 8 };
+    private readonly Button btnSprAuto = new() { Text = "자동 ▶", Width = 72, Height = 26, Left = 166, Top = 6 };
+    private readonly Label lblSpr = new() { AutoSize = true, Left = 248, Top = 11 };
+    private readonly System.Windows.Forms.Timer sprAutoTimer = new() { Interval = 120 };
+    private byte[]? currentSprDecoded;
+    private bool sprRenderBusy;
 
     private readonly ToolStripStatusLabel status = new() { Text = "준비" };
     private readonly ToolStripStatusLabel statusClient = new() { Text = "클라: 대기" };
@@ -129,7 +133,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.6 - 파일명 시작 검색";
+        Text = "Lineage Client Inspector V2.7 - 자연정렬 + SPR 자동재생";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -176,6 +180,7 @@ internal sealed class ClientInspectorForm : Form
 
         sprBar.Controls.Add(new Label { Text = "프레임", AutoSize = true, Left = 12, Top = 11 });
         sprBar.Controls.Add(numSprFrame);
+        sprBar.Controls.Add(btnSprAuto);
         sprBar.Controls.Add(lblSpr);
 
         var right = new Panel { Dock = DockStyle.Fill };
@@ -248,6 +253,8 @@ internal sealed class ClientInspectorForm : Form
         cboType.SelectedIndexChanged += (_, _) => ApplyFilter();
         grid.SelectionChanged += async (_, _) => await PreviewSelectedAsync();
         numSprFrame.ValueChanged += async (_, _) => await RenderSprFrameAsync();
+        btnSprAuto.Click += (_, _) => ToggleSprAuto();
+        sprAutoTimer.Tick += (_, _) => AdvanceSprFrame();
         btnSave.Click += async (_, _) => await SaveSelectedAsync();
         btnHash.Click += async (_, _) => await HashSelectedAsync();
 
@@ -265,6 +272,7 @@ internal sealed class ClientInspectorForm : Form
 
         FormClosed += (_, _) =>
         {
+            sprAutoTimer.Stop();
             foreach (var scanner in scanners.Values) scanner.Dispose();
             imagePreview.Image?.Dispose();
             sprPreview.Image?.Dispose();
@@ -1391,6 +1399,8 @@ internal sealed class ClientInspectorForm : Form
                         (type == "서버팩" ? r.Source == "서버팩" : r.Type == type))
             .ToList();
 
+        currentRows.Sort(CompareRowsNatural);
+
         grid.DataSource = null;
         grid.DataSource = new BindingList<ViewRow>(currentRows);
 
@@ -1398,6 +1408,80 @@ internal sealed class ClientInspectorForm : Form
             lblCount.Text = $"검색 {currentRows.Count:N0}/{globalSearchResults.Count:N0}";
         else
             lblCount.Text = $"{currentRows.Count:N0}/{allRows.Count:N0}";
+    }
+
+    private static int CompareRowsNatural(ViewRow? a, ViewRow? b)
+    {
+        if (ReferenceEquals(a, b)) return 0;
+        if (a is null) return -1;
+        if (b is null) return 1;
+
+        string aName = Path.GetFileName(a.Path.TrimEnd('\\', '/'));
+        string bName = Path.GetFileName(b.Path.TrimEnd('\\', '/'));
+
+        int cmp = NaturalCompare(aName, bName);
+        if (cmp != 0) return cmp;
+
+        cmp = NaturalCompare(a.Path, b.Path);
+        if (cmp != 0) return cmp;
+
+        cmp = string.Compare(a.Source, b.Source, StringComparison.OrdinalIgnoreCase);
+        if (cmp != 0) return cmp;
+
+        return NaturalCompare(a.Container, b.Container);
+    }
+
+    private static int NaturalCompare(string? a, string? b)
+    {
+        a ??= "";
+        b ??= "";
+
+        int ia = 0;
+        int ib = 0;
+
+        while (ia < a.Length && ib < b.Length)
+        {
+            char ca = a[ia];
+            char cb = b[ib];
+
+            if (char.IsDigit(ca) && char.IsDigit(cb))
+            {
+                int aStart = ia;
+                int bStart = ib;
+
+                while (ia < a.Length && char.IsDigit(a[ia])) ia++;
+                while (ib < b.Length && char.IsDigit(b[ib])) ib++;
+
+                string aNum = a[aStart..ia].TrimStart('0');
+                string bNum = b[bStart..ib].TrimStart('0');
+
+                if (aNum.Length == 0) aNum = "0";
+                if (bNum.Length == 0) bNum = "0";
+
+                if (aNum.Length != bNum.Length)
+                    return aNum.Length.CompareTo(bNum.Length);
+
+                int ncmp = string.Compare(aNum, bNum, StringComparison.Ordinal);
+                if (ncmp != 0)
+                    return ncmp;
+
+                int rawLenA = ia - aStart;
+                int rawLenB = ib - bStart;
+                if (rawLenA != rawLenB)
+                    return rawLenA.CompareTo(rawLenB);
+
+                continue;
+            }
+
+            int ccmp = char.ToUpperInvariant(ca).CompareTo(char.ToUpperInvariant(cb));
+            if (ccmp != 0)
+                return ccmp;
+
+            ia++;
+            ib++;
+        }
+
+        return (a.Length - ia).CompareTo(b.Length - ib);
     }
 
     private async Task GlobalSearchAsync()
@@ -2167,12 +2251,12 @@ internal sealed class ClientInspectorForm : Form
             }
             else if (type == "SPR")
             {
-                byte[] spr = SpriteCodec.DecodeIfNeeded(currentRaw);
-                var info = SprInfo.Analyze(spr);
+                currentSprDecoded = SpriteCodec.DecodeIfNeeded(currentRaw);
+                var info = SprInfo.Analyze(currentSprDecoded);
 
+                numSprFrame.Minimum = 0;
                 numSprFrame.Maximum = Math.Max(0, info.FrameCount - 1);
-                if (numSprFrame.Value > numSprFrame.Maximum)
-                    numSprFrame.Value = numSprFrame.Maximum;
+                numSprFrame.Value = 0;
 
                 lblSpr.Text = $"총 {info.FrameCount}프레임 | " +
                               $"{(info.IsPalette ? "Palette " + info.PaletteSize : "RGB555")} | " +
@@ -2182,6 +2266,9 @@ internal sealed class ClientInspectorForm : Form
                 sprPreview.Visible = true;
                 sprPreview.BringToFront();
                 await RenderSprFrameAsync();
+
+                if (info.FrameCount > 1)
+                    StartSprAuto();
             }
             else if (type == "DB백업")
             {
@@ -2278,13 +2365,16 @@ internal sealed class ClientInspectorForm : Form
 
     private async Task RenderSprFrameAsync()
     {
-        if (currentRaw == null || currentRow == null) return;
+        if (currentRaw == null || currentRow == null || currentSprDecoded == null) return;
         if (DetectTypeFromData(currentRow.Path, currentRaw) != "SPR") return;
+        if (sprRenderBusy) return;
+
+        sprRenderBusy = true;
 
         try
         {
-            byte[] spr = SpriteCodec.DecodeIfNeeded(currentRaw);
             int frame = (int)numSprFrame.Value;
+            byte[] spr = currentSprDecoded;
 
             var bmp = await Task.Run(() => SprDecoder.DecodeFrame(spr, frame));
 
@@ -2293,8 +2383,48 @@ internal sealed class ClientInspectorForm : Form
         }
         catch (Exception ex)
         {
+            StopSprAuto();
             lblSpr.Text = "SPR 표시 실패: " + ex.Message;
         }
+        finally
+        {
+            sprRenderBusy = false;
+        }
+    }
+
+    private void ToggleSprAuto()
+    {
+        if (sprAutoTimer.Enabled)
+            StopSprAuto();
+        else
+            StartSprAuto();
+    }
+
+    private void StartSprAuto()
+    {
+        if (currentSprDecoded == null || numSprFrame.Maximum <= 0)
+            return;
+
+        sprAutoTimer.Start();
+        btnSprAuto.Text = "정지 ■";
+    }
+
+    private void StopSprAuto()
+    {
+        sprAutoTimer.Stop();
+        btnSprAuto.Text = "자동 ▶";
+    }
+
+    private void AdvanceSprFrame()
+    {
+        if (!sprBar.Visible || currentSprDecoded == null || sprRenderBusy)
+            return;
+
+        decimal next = numSprFrame.Value + 1;
+        if (next > numSprFrame.Maximum)
+            next = numSprFrame.Minimum;
+
+        numSprFrame.Value = next;
     }
 
     private async Task SaveSelectedAsync()
@@ -2331,6 +2461,9 @@ internal sealed class ClientInspectorForm : Form
 
     private void ClearPreview()
     {
+        StopSprAuto();
+        currentSprDecoded = null;
+
         if (!editMode)
             textPreview.ReadOnly = true;
 
