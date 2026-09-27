@@ -521,9 +521,13 @@ internal sealed class ClientInspectorForm : Form
                     truncated = true;
             }
 
-            var sqlBackups = allRows
-                .Where(r => r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            bool shortNumeric = q.All(char.IsDigit) && q.Length <= 3;
+
+            var sqlBackups = shortNumeric
+                ? new List<ViewRow>()
+                : allRows
+                    .Where(r => r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
 
             foreach (var sql in sqlBackups)
             {
@@ -560,11 +564,11 @@ internal sealed class ClientInspectorForm : Form
                     {
                         match = "파일명";
                     }
-                    else if (!string.IsNullOrEmpty(row.SearchText) && StrictContains(row.SearchText, q))
+                    else if (!shortNumeric && !string.IsNullOrEmpty(row.SearchText) && StrictContains(row.SearchText, q))
                     {
                         match = "의미있는 내용";
                     }
-                    else if (ShouldContentSearch(row) && await TextContentContainsAsync(row, q))
+                    else if (!shortNumeric && ShouldContentSearch(row) && await TextContentContainsAsync(row, q))
                     {
                         match = "텍스트 내용";
                     }
@@ -594,9 +598,16 @@ internal sealed class ClientInspectorForm : Form
             globalSearchResults = results;
             ApplyFilter();
 
-            status.Text = truncated
-                ? $"정확 검색: '{q}' → {results.Count:N0}건 표시 (500건 초과, 검색어를 더 구체화하세요)"
-                : $"정확 검색 완료: '{q}' → {results.Count:N0}건";
+            if (shortNumeric)
+            {
+                status.Text = $"정확 검색 완료: '{q}' → {results.Count:N0}건 | 1~3자리 숫자는 DB/본문 검색 제외";
+            }
+            else
+            {
+                status.Text = truncated
+                    ? $"정확 검색: '{q}' → {results.Count:N0}건 표시 (500건 초과, 검색어를 더 구체화하세요)"
+                    : $"정확 검색 완료: '{q}' → {results.Count:N0}건";
+            }
         }
         catch (Exception ex)
         {
