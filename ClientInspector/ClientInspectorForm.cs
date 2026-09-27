@@ -124,7 +124,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.2 - 원본 파일 편집";
+        Text = "Lineage Client Inspector V2.3 - 원본 수정/복원";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -194,12 +194,17 @@ internal sealed class ClientInspectorForm : Form
         var editOriginalItem = new ToolStripMenuItem("원본 파일 수정");
         editOriginalItem.Click += async (_, _) => await BeginEditOriginalAsync();
 
+        var restoreOriginalItem = new ToolStripMenuItem("원본 복원 (.bak)");
+        restoreOriginalItem.Click += async (_, _) => await RestoreOriginalAsync();
+
         filePathMenu.Items.Add(copyNameItem);
         filePathMenu.Items.Add(new ToolStripSeparator());
         filePathMenu.Items.Add(editOriginalItem);
+        filePathMenu.Items.Add(restoreOriginalItem);
         filePathMenu.Opening += (_, _) =>
         {
             editOriginalItem.Enabled = contextMenuRow != null && CanEditOriginal(contextMenuRow);
+            restoreOriginalItem.Enabled = contextMenuRow != null && CanRestoreOriginal(contextMenuRow);
         };
 
         grid.CellMouseDown += Grid_CellMouseDown;
@@ -278,6 +283,75 @@ internal sealed class ClientInspectorForm : Form
 
         Clipboard.SetText(name);
         status.Text = $"이름 복사 완료: {name}";
+    }
+
+    private bool CanRestoreOriginal(ViewRow row)
+    {
+        string? path = GetOriginalFilePath(row);
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        return File.Exists(path + ".bak");
+    }
+
+    private async Task RestoreOriginalAsync()
+    {
+        if (contextMenuRow == null)
+            return;
+
+        string? path = GetOriginalFilePath(contextMenuRow);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        string backup = path + ".bak";
+        if (!File.Exists(backup))
+        {
+            MessageBox.Show(this, "복원할 .bak 백업 파일이 없습니다.",
+                "원본 복원", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var answer = MessageBox.Show(this,
+            $"백업 파일로 원본을 복원합니다.\n\n원본: {path}\n백업: {backup}\n\n현재 파일은 .before_restore 로 한 번 더 보관합니다.",
+            "원본 복원 확인",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (answer != DialogResult.Yes)
+            return;
+
+        try
+        {
+            string beforeRestore = path + ".before_restore";
+
+            if (File.Exists(path))
+                File.Copy(path, beforeRestore, overwrite: true);
+
+            byte[] backupBytes = await File.ReadAllBytesAsync(backup);
+            await File.WriteAllBytesAsync(path, backupBytes);
+
+            currentRaw = backupBytes;
+
+            try
+            {
+                contextMenuRow.SizeBytes = backupBytes.LongLength;
+
+                if (TextExtensions.Contains(contextMenuRow.Extension))
+                    contextMenuRow.SearchText = DecodeText(backupBytes).Text;
+            }
+            catch { }
+
+            if (currentRow == contextMenuRow)
+                await PreviewSelectedAsync();
+
+            grid.Refresh();
+            status.Text = $"원본 복원 완료: {path} | 복원 전 파일: {beforeRestore}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "원본 복원 실패",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private bool CanEditOriginal(ViewRow row)
