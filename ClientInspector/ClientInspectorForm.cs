@@ -435,9 +435,18 @@ internal sealed class ClientInspectorForm : Form
                         byte[] bytes = ms.ToArray();
 
                         if (TextExtensions.Contains(row.Extension))
+                        {
                             row.SearchText = DecodeText(bytes).Text;
+                        }
+                        else if (LooksLikeText(bytes))
+                        {
+                            row.SearchText = DecodeText(bytes).Text;
+                        }
                         else
-                            row.SearchText = ExtractPrintableStrings(bytes, 250_000);
+                        {
+                            // 바이너리 항목은 raw byte 검색 대신 실제 ASCII 문자열만 색인한다.
+                            row.SearchText = ExtractMeaningfulAsciiStrings(bytes, 250_000);
+                        }
                     }
                     catch { }
                 }
@@ -512,7 +521,7 @@ internal sealed class ClientInspectorForm : Form
                 {
                     long offset = await FindContentOffsetAsync(row, q);
                     if (offset >= 0)
-                        match = $"파일 내용 @ 0x{offset:X}";
+                        match = $"텍스트 내용 @ 0x{offset:X}";
                 }
 
                 if (match != null)
@@ -547,18 +556,9 @@ internal sealed class ClientInspectorForm : Form
 
     private static bool ShouldContentSearch(ViewRow row)
     {
-        string ext = row.Extension.ToLowerInvariant();
-
-        // PAK/IDX 컨테이너 자체는 이미 내부 항목으로 풀어서 별도 검색하므로 중복 대용량 검색을 피한다.
-        if (row.Source == "실제파일" && (ext == ".pak" || ext == ".idx"))
-            return false;
-
-        // 그림/사운드/스프라이트의 픽셀·오디오 페이로드는 문자열 정보 검색 대상에서 제외한다.
-        if (ext is ".png" or ".bmp" or ".jpg" or ".jpeg" or ".gif" or ".ico" or ".tif" or ".tiff" or
-                   ".spr" or ".wav" or ".mp3" or ".ogg")
-            return false;
-
-        return true;
+        // 원시 바이너리 바이트는 검색하지 않는다.
+        // HTML/SQL/TXT/XML/JSON 등 명확한 텍스트 형식만 실제 파일 내용을 검색한다.
+        return TextExtensions.Contains(row.Extension);
     }
 
     private async Task<long> FindContentOffsetAsync(ViewRow row, string query)
@@ -961,17 +961,54 @@ internal sealed class ClientInspectorForm : Form
         }
     }
 
-    private static string ExtractPrintableStrings(byte[] data, int maxChars)
+    private static bool LooksLikeText(byte[] data)
+    {
+        if (data.Length == 0) return false;
+
+        int sample = Math.Min(data.Length, 64 * 1024);
+        int printable = 0;
+        int zero = 0;
+
+        for (int i = 0; i < sample; i++)
+        {
+            byte b = data[i];
+            if (b == 0) zero++;
+            if (b == 9 || b == 10 || b == 13 || (b >= 32 && b <= 126))
+                printable++;
+        }
+
+        double printableRatio = printable / (double)sample;
+        double zeroRatio = zero / (double)sample;
+
+        return printableRatio >= 0.82 && zeroRatio < 0.05;
+    }
+
+    private static string ExtractMeaningfulAsciiStrings(byte[] data, int maxChars)
     {
         var sb = new StringBuilder(Math.Min(maxChars, 100_000));
         var current = new StringBuilder();
 
+        static bool IsUseful(string value)
+        {
+            if (value.Length < 6) return false;
+
+            int meaningful = 0;
+            foreach (char c in value)
+            {
+                if (char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/' or '\\' or ':' or '@')
+                    meaningful++;
+            }
+
+            return meaningful >= 4 && meaningful >= value.Length / 3;
+        }
+
         void Flush()
         {
-            if (current.Length >= 4)
+            if (current.Length > 0)
             {
-                if (sb.Length + current.Length + 2 <= maxChars)
-                    sb.AppendLine(current.ToString());
+                string value = current.ToString().Trim();
+                if (IsUseful(value) && sb.Length + value.Length + 2 <= maxChars)
+                    sb.AppendLine(value);
             }
             current.Clear();
         }
@@ -980,7 +1017,7 @@ internal sealed class ClientInspectorForm : Form
         {
             if (sb.Length >= maxChars) break;
 
-            if ((b >= 32 && b <= 126) || b >= 0xA1)
+            if (b == 9 || (b >= 32 && b <= 126))
                 current.Append((char)b);
             else
                 Flush();
