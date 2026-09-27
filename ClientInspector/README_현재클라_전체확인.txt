@@ -1,27 +1,22 @@
-Lineage Client Inspector V1.0
-현재 사용 중인 리니지 클라이언트 구조 확인용 읽기 전용 도구
+Lineage Client Inspector V1.1
+현재 사용 중인 리니지 클라이언트 전체 확인용 읽기 전용 도구
 
-[현재 클라 기준]
-- Sprite00.idx/pak ~ Sprite15.idx/pak 자동 인식
-- Image00.idx/pak ~ Image15.idx/pak 자동 인식
-- Data / Tile / Text / Sound 및 기타 IDX/PAK 자동 검색
-- LEGACY28, _EXT, _EXTB$, _IDX, _RMS, DES 인덱스 처리
-- IDX 내부 파일명 / PAK / Offset / 원본크기 / 압축크기 / Flags 표시
-- Sprite 파일명 byte 합계 % 16 기준 실제 분할팩 검사
-- SPR 선택 시 프레임 수 / Palette 또는 RGB555 / FrameType / ZLIB 확인
-- SPR 프레임 미리보기
-- 선택 원본 추출
-- 전체 클라 실제 파일 목록 표시
-- 선택 실제 파일 SHA-256 계산
-- TSV 저장
+[V1.1 추가]
+- HTML/텍스트 확인 탭 추가
+- 실제 클라 폴더의 .html/.htm/.xml/.txt/.json/.ini/.cfg/.js/.css/.lua 등 표시
+- IDX/PAK 내부의 HTML/텍스트 항목도 함께 표시
+- 선택 즉시 원문 소스 미리보기
+- UTF-8 / UTF-16 / CP949(EUC-KR) 자동 판독
+- 목록 검색 / HTML만 보기 / 본문 다음 찾기
+- 선택한 HTML/텍스트의 원본 바이트 저장
 
-[기사 남자 확인]
-1. 프로그램 실행
-2. 현재 사용하는 클라이언트 폴더 선택
-3. 전체 검사
-4. '기사 61 바로 찾기' 클릭
-5. 61-*.spr 전체가 어느 SpriteXX.idx/pak에 들어 있는지 확인
-6. 검색 결과 SPR 분석으로 프레임/형식 확인
-7. 원하는 SPR 선택 후 원본 추출
+[기존 기능]
+- Sprite00~15, Image00~15 및 Data/Tile/Text/Sound 등 IDX/PAK 자동 인식
+- LEGACY28, _EXT, _EXTB$, _IDX, _RMS, DES 처리
+- 내부 파일명 / PAK / Offset / 크기 / 압축정보 / Flags
+- 기사 61 바로 찾기
+- SPR 프레임 수 / Palette/RGB555 / FrameType / ZLIB 분석
+- SPR 프레임 미리보기와 원본 추출
+- 실제 클라 전체 파일 목록 및 선택 SHA-256
 
 이 버전은 원본을 수정하지 않는 검사/추출 전용입니다.

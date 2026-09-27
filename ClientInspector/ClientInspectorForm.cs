@@ -23,6 +23,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly DataGridView gridEntries = NewGrid();
     private readonly DataGridView gridPacks = NewGrid();
     private readonly DataGridView gridFiles = NewGrid();
+    private readonly DataGridView gridTexts = NewGrid();
 
     private readonly PictureBox preview = new()
     {
@@ -33,22 +34,53 @@ internal sealed class ClientInspectorForm : Form
     private readonly NumericUpDown numFrame = new() { Minimum = 0, Maximum = 0, Width = 90 };
     private readonly Label lblPreviewInfo = new() { AutoSize = true, Padding = new Padding(6) };
 
+    private readonly RichTextBox txtTextPreview = new()
+    {
+        Dock = DockStyle.Fill,
+        ReadOnly = true,
+        DetectUrls = false,
+        WordWrap = false,
+        Font = new Font("Consolas", 9F),
+        BackColor = Color.White,
+        HideSelection = false
+    };
+    private readonly TextBox txtTextListFilter = new() { Width = 220, PlaceholderText = "파일명/경로 검색" };
+    private readonly Button btnTextListFilter = new() { Text = "목록 검색", AutoSize = true };
+    private readonly Button btnHtmlOnly = new() { Text = "HTML만 보기", AutoSize = true };
+    private readonly Button btnAllText = new() { Text = "전체 텍스트", AutoSize = true };
+    private readonly TextBox txtFindInText = new() { Width = 180, PlaceholderText = "본문 검색" };
+    private readonly Button btnFindInText = new() { Text = "다음 찾기", AutoSize = true };
+    private readonly Button btnSaveTextRaw = new() { Text = "선택 원본 저장", AutoSize = true };
+    private readonly Label lblTextInfo = new() { AutoSize = true, Padding = new Padding(6) };
+
     private readonly BindingList<PackRow> packRows = new();
     private readonly BindingList<FileRow> fileRows = new();
     private readonly List<EntryRow> allEntries = new();
     private List<EntryRow> currentEntries = new();
+    private readonly List<TextRow> allTextRows = new();
+    private List<TextRow> currentTextRows = new();
     private readonly Dictionary<string, AnyPakScanner> scanners = new(StringComparer.OrdinalIgnoreCase);
 
     private string? rootPath;
+    private byte[]? currentTextRaw;
+    private string currentTextSuggestedName = "text.bin";
+
+    private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".html", ".htm", ".xml", ".txt", ".json", ".ini", ".cfg", ".conf",
+        ".properties", ".js", ".css", ".lua", ".csv", ".log", ".md", ".yml", ".yaml"
+    };
 
     public ClientInspectorForm()
     {
-        Text = "Lineage Client Inspector - 현재 클라 전체 확인";
-        Width = 1560;
-        Height = 920;
+        Text = "Lineage Client Inspector V1.1 - 현재 클라 전체 확인";
+        Width = 1580;
+        Height = 940;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Malgun Gothic", 9F);
         MinimumSize = new Size(1180, 720);
+
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
         cboGroup.Items.AddRange(new object[] { "전체", "Sprite", "Image", "Data", "Tile", "Text", "Sound", "기타" });
         cboGroup.SelectedIndex = 0;
@@ -91,6 +123,40 @@ internal sealed class ClientInspectorForm : Form
         entrySplit.Panel2.Controls.Add(right);
         tabEntries.Controls.Add(entrySplit);
 
+        var tabTexts = new TabPage("HTML/텍스트 확인");
+        var textSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 690 };
+        var textLeft = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        textLeft.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        textLeft.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var textListBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(4) };
+        textListBar.Controls.Add(txtTextListFilter);
+        textListBar.Controls.Add(btnTextListFilter);
+        textListBar.Controls.Add(btnHtmlOnly);
+        textListBar.Controls.Add(btnAllText);
+        textLeft.Controls.Add(textListBar, 0, 0);
+        textLeft.Controls.Add(gridTexts, 0, 1);
+        textSplit.Panel1.Controls.Add(textLeft);
+
+        var textRight = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3 };
+        textRight.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        textRight.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        textRight.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var textFindBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(4) };
+        textFindBar.Controls.Add(txtFindInText);
+        textFindBar.Controls.Add(btnFindInText);
+        textFindBar.Controls.Add(btnSaveTextRaw);
+        textFindBar.Controls.Add(lblTextInfo);
+        textRight.Controls.Add(textFindBar, 0, 0);
+        textRight.Controls.Add(txtTextPreview, 0, 1);
+        textRight.Controls.Add(new Label
+        {
+            Text = "HTML/HTM은 렌더링 화면이 아니라 원문 소스를 표시합니다. UTF-8/UTF-16/CP949를 자동 판독합니다.",
+            AutoSize = true,
+            Padding = new Padding(6)
+        }, 0, 2);
+        textSplit.Panel2.Controls.Add(textRight);
+        tabTexts.Controls.Add(textSplit);
+
         var tabPacks = new TabPage("IDX/PAK 묶음");
         tabPacks.Controls.Add(gridPacks);
 
@@ -108,6 +174,7 @@ internal sealed class ClientInspectorForm : Form
         tabFiles.Controls.Add(filePanel);
 
         tabs.TabPages.Add(tabEntries);
+        tabs.TabPages.Add(tabTexts);
         tabs.TabPages.Add(tabPacks);
         tabs.TabPages.Add(tabFiles);
 
@@ -142,6 +209,21 @@ internal sealed class ClientInspectorForm : Form
         gridEntries.SelectionChanged += async (_, _) => await PreviewSelectedAsync();
         numFrame.ValueChanged += async (_, _) => await PreviewSelectedAsync();
 
+        btnTextListFilter.Click += (_, _) => ApplyTextFilter(false);
+        txtTextListFilter.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ApplyTextFilter(false); }
+        };
+        btnHtmlOnly.Click += (_, _) => ApplyTextFilter(true);
+        btnAllText.Click += (_, _) => { txtTextListFilter.Clear(); ApplyTextFilter(false); };
+        gridTexts.SelectionChanged += async (_, _) => await PreviewSelectedTextAsync();
+        btnFindInText.Click += (_, _) => FindNextInText();
+        txtFindInText.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; FindNextInText(); }
+        };
+        btnSaveTextRaw.Click += async (_, _) => await SaveCurrentTextRawAsync();
+
         FormClosed += (_, _) =>
         {
             foreach (var s in scanners.Values) s.Dispose();
@@ -174,6 +256,11 @@ internal sealed class ClientInspectorForm : Form
         };
         gridPacks.DataBindingComplete += (_, _) => FillColumn(gridPacks, nameof(PackRow.IdxFile));
         gridFiles.DataBindingComplete += (_, _) => FillColumn(gridFiles, nameof(FileRow.RelativePath));
+        gridTexts.DataBindingComplete += (_, _) =>
+        {
+            HideColumn(gridTexts, nameof(TextRow.SourceKey));
+            FillColumn(gridTexts, nameof(TextRow.Path));
+        };
     }
 
     private static void HideColumn(DataGridView grid, string name)
@@ -218,6 +305,10 @@ internal sealed class ClientInspectorForm : Form
             allEntries.Clear();
             packRows.Clear();
             fileRows.Clear();
+            allTextRows.Clear();
+            currentTextRows.Clear();
+            txtTextPreview.Clear();
+            currentTextRaw = null;
             preview.Image?.Dispose();
             preview.Image = null;
 
@@ -228,8 +319,10 @@ internal sealed class ClientInspectorForm : Form
             foreach (var f in result.Files) fileRows.Add(f);
             foreach (var kv in result.Scanners) scanners[kv.Key] = kv.Value;
 
+            BuildTextIndex();
+            ApplyTextFilter(false);
             await ApplyFilterAsync(false);
-            status.Text = $"완료: IDX/PAK {packRows.Count:N0}개, 내부 항목 {allEntries.Count:N0}개, 실제 파일 {fileRows.Count:N0}개";
+            status.Text = $"완료: IDX/PAK {packRows.Count:N0}개, 내부 항목 {allEntries.Count:N0}개, 실제 파일 {fileRows.Count:N0}개, HTML/텍스트 {allTextRows.Count:N0}개";
         }
         catch (Exception ex)
         {
@@ -251,7 +344,6 @@ internal sealed class ClientInspectorForm : Form
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        int done = 0;
         foreach (var idx in idxFiles)
         {
             string pak = Path.ChangeExtension(idx, ".pak");
@@ -324,8 +416,6 @@ internal sealed class ClientInspectorForm : Form
                     Status = ex.Message
                 });
             }
-
-            done++;
         }
 
         foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
@@ -343,6 +433,180 @@ internal sealed class ClientInspectorForm : Form
         }
 
         return result;
+    }
+
+    private void BuildTextIndex()
+    {
+        allTextRows.Clear();
+
+        foreach (var f in fileRows)
+        {
+            if (!IsTextFile(f.RelativePath)) continue;
+            allTextRows.Add(new TextRow
+            {
+                Source = "실제파일",
+                Path = f.RelativePath,
+                Container = "",
+                Extension = Path.GetExtension(f.RelativePath),
+                SizeBytes = f.SizeBytes,
+                SourceKey = f.RelativePath
+            });
+        }
+
+        foreach (var e in allEntries)
+        {
+            if (!IsTextFile(e.FileName)) continue;
+            allTextRows.Add(new TextRow
+            {
+                Source = "PAK 내부",
+                Path = e.FileName,
+                Container = e.IdxFile + " → " + e.PakFile,
+                Extension = Path.GetExtension(e.FileName),
+                SizeBytes = e.FileSize,
+                SourceKey = e.IdxFile
+            });
+        }
+
+        allTextRows.Sort((a, b) =>
+        {
+            int c = string.Compare(a.Extension, b.Extension, StringComparison.OrdinalIgnoreCase);
+            if (c != 0) return c;
+            return string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static bool IsTextFile(string path) => TextExtensions.Contains(Path.GetExtension(path));
+
+    private void ApplyTextFilter(bool htmlOnly)
+    {
+        string q = txtTextListFilter.Text.Trim();
+        currentTextRows = allTextRows
+            .Where(x => !htmlOnly || x.Extension.Equals(".html", StringComparison.OrdinalIgnoreCase) || x.Extension.Equals(".htm", StringComparison.OrdinalIgnoreCase))
+            .Where(x => q.Length == 0 || x.Path.Contains(q, StringComparison.OrdinalIgnoreCase) || x.Container.Contains(q, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        gridTexts.DataSource = null;
+        gridTexts.DataSource = new BindingList<TextRow>(currentTextRows);
+        status.Text = $"HTML/텍스트 표시 {currentTextRows.Count:N0} / 전체 {allTextRows.Count:N0}";
+    }
+
+    private async Task PreviewSelectedTextAsync()
+    {
+        if (gridTexts.SelectedRows.Count != 1) return;
+        if (gridTexts.SelectedRows[0].DataBoundItem is not TextRow row) return;
+
+        try
+        {
+            status.Text = "텍스트 읽는 중...";
+            byte[] data;
+
+            if (row.Source == "실제파일")
+            {
+                string full = Path.Combine(rootPath!, row.SourceKey);
+                data = await File.ReadAllBytesAsync(full);
+            }
+            else
+            {
+                string idxFull = Path.Combine(rootPath!, row.SourceKey);
+                if (!scanners.TryGetValue(idxFull, out var scanner))
+                    throw new InvalidOperationException("해당 IDX 스캐너를 찾을 수 없습니다.");
+
+                var rec = scanner.Entries.FirstOrDefault(e => e.FileName.Equals(row.Path, StringComparison.OrdinalIgnoreCase));
+                if (rec == null) throw new FileNotFoundException("PAK 내부 항목을 찾을 수 없습니다.", row.Path);
+                data = await Task.Run(() => scanner.Extract(rec));
+            }
+
+            currentTextRaw = data;
+            currentTextSuggestedName = Path.GetFileName(row.Path);
+            var decoded = DecodeText(data);
+
+            txtTextPreview.Text = decoded.Text;
+            txtTextPreview.SelectionStart = 0;
+            txtTextPreview.SelectionLength = 0;
+
+            lblTextInfo.Text = $"{row.Source} | {decoded.EncodingName} | {data.Length:N0} bytes | {row.Path}";
+            status.Text = $"텍스트 확인: {row.Path}";
+        }
+        catch (Exception ex)
+        {
+            currentTextRaw = null;
+            txtTextPreview.Text = "읽기 실패\r\n\r\n" + ex;
+            lblTextInfo.Text = "읽기 실패";
+            status.Text = "텍스트 읽기 실패";
+        }
+    }
+
+    private static DecodedText DecodeText(byte[] data)
+    {
+        if (data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
+            return new DecodedText(new UTF8Encoding(true).GetString(data), "UTF-8 BOM");
+
+        if (data.Length >= 2 && data[0] == 0xFF && data[1] == 0xFE)
+            return new DecodedText(Encoding.Unicode.GetString(data), "UTF-16 LE");
+
+        if (data.Length >= 2 && data[0] == 0xFE && data[1] == 0xFF)
+            return new DecodedText(Encoding.BigEndianUnicode.GetString(data), "UTF-16 BE");
+
+        if (data.Length >= 4 && data[0] == 0xFF && data[1] == 0xFE && data[2] == 0x00 && data[3] == 0x00)
+            return new DecodedText(Encoding.UTF32.GetString(data), "UTF-32 LE");
+
+        try
+        {
+            string utf8 = new UTF8Encoding(false, true).GetString(data);
+            return new DecodedText(utf8, "UTF-8");
+        }
+        catch (DecoderFallbackException)
+        {
+            try
+            {
+                var cp949 = Encoding.GetEncoding(949, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+                return new DecodedText(cp949.GetString(data), "CP949/EUC-KR");
+            }
+            catch
+            {
+                return new DecodedText(Encoding.GetEncoding(949).GetString(data), "CP949 추정");
+            }
+        }
+    }
+
+    private void FindNextInText()
+    {
+        string q = txtFindInText.Text;
+        if (string.IsNullOrEmpty(q) || txtTextPreview.TextLength == 0) return;
+
+        int start = txtTextPreview.SelectionStart + txtTextPreview.SelectionLength;
+        int idx = txtTextPreview.Find(q, start, RichTextBoxFinds.None);
+        if (idx < 0 && start > 0)
+            idx = txtTextPreview.Find(q, 0, RichTextBoxFinds.None);
+
+        if (idx < 0)
+        {
+            status.Text = $"본문에서 '{q}'을(를) 찾지 못했습니다.";
+            return;
+        }
+
+        txtTextPreview.Select(idx, q.Length);
+        txtTextPreview.ScrollToCaret();
+        txtTextPreview.Focus();
+        status.Text = $"본문 검색: {idx:N0} 위치";
+    }
+
+    private async Task SaveCurrentTextRawAsync()
+    {
+        if (currentTextRaw == null)
+        {
+            MessageBox.Show(this, "먼저 HTML/텍스트 항목을 선택하세요.");
+            return;
+        }
+
+        using var dlg = new SaveFileDialog
+        {
+            FileName = string.IsNullOrWhiteSpace(currentTextSuggestedName) ? "text.bin" : currentTextSuggestedName,
+            Filter = "모든 파일 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        await File.WriteAllBytesAsync(dlg.FileName, currentTextRaw);
+        status.Text = "원본 저장 완료";
     }
 
     private async Task ApplyFilterAsync(bool autoAnalyzeSpr)
@@ -641,6 +905,8 @@ internal sealed class ClientInspectorForm : Form
         return int.TryParse(s, out int n) && n >= 0 && n <= 15 ? n : -1;
     }
 
+    private sealed record DecodedText(string Text, string EncodingName);
+
     private sealed class ScanResult
     {
         public List<PackRow> Packs { get; } = new();
@@ -690,5 +956,15 @@ internal sealed class ClientInspectorForm : Form
         [DisplayName("크기")] public long SizeBytes { get; set; }
         [DisplayName("수정시각")] public string Modified { get; set; } = "";
         [DisplayName("SHA-256")] public string Sha256 { get; set; } = "";
+    }
+
+    internal sealed class TextRow
+    {
+        [DisplayName("위치")] public string Source { get; set; } = "";
+        [DisplayName("파일/내부경로")] public string Path { get; set; } = "";
+        [DisplayName("IDX/PAK")] public string Container { get; set; } = "";
+        [DisplayName("확장자")] public string Extension { get; set; } = "";
+        [DisplayName("크기")] public long SizeBytes { get; set; }
+        [Browsable(false)] public string SourceKey { get; set; } = "";
     }
 }
