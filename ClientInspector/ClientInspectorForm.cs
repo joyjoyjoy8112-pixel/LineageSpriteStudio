@@ -101,7 +101,7 @@ internal sealed class ClientInspectorForm : Form
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".html", ".htm", ".xml", ".txt", ".json", ".ini", ".cfg", ".conf",
-        ".properties", ".js", ".css", ".lua", ".csv", ".log", ".md", ".yml", ".yaml"
+        ".properties", ".js", ".css", ".lua", ".csv", ".log", ".md", ".yml", ".yaml", ".sql"
     };
 
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -113,7 +113,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V1.5 - 클라 + Navicat PSC 통합 확인";
+        Text = "Lineage Client Inspector V1.6 - 클라 + Navicat PSC 통합 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
