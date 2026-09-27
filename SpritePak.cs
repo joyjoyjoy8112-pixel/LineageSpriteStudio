@@ -242,12 +242,14 @@ internal sealed class SpritePak : IDisposable
                                 item.Entry.CompressedSize = storedReplacement.Length;
                                 item.Entry.Flags = 2;
                             }
-                            else if (item.Flags == 0)
+                            else if (item.Flags == 0 || item.Flags == 1)
                             {
+                                // AnyPakScanner도 _EXT Flags 0/1은 FileSize만큼 RAW로 읽는다.
+                                // 따라서 Flags=1 엔트리는 플래그를 그대로 유지한 RAW 데이터로 교체한다.
                                 storedReplacement = replacement;
                                 item.Entry.FileSize = replacement.Length;
                                 item.Entry.CompressedSize = 0;
-                                item.Entry.Flags = 0;
+                                item.Entry.Flags = item.Flags;
                             }
                             else
                             {
@@ -296,6 +298,28 @@ internal sealed class SpritePak : IDisposable
             // PAK을 먼저 완성한 뒤 교체하고, 새 offset/size로 IDX를 저장한다.
             File.Move(tmpPak, PakPath, true);
             SaveIndex();
+
+            // 저장 직후 실제 IDX/PAK를 다시 열어 교체한 항목이 원본 replacement와
+            // 정확히 같은 바이트로 추출되는지 검증한다.
+            using (var verifyPak = new SpritePak(IdxPath))
+            {
+                foreach (var replacement in replacements)
+                {
+                    var verifyEntry = verifyPak.Entries.FirstOrDefault(e =>
+                        e.FileName.Equals(replacement.Key, StringComparison.OrdinalIgnoreCase));
+
+                    if (verifyEntry == null)
+                        throw new InvalidDataException($"저장 검증 실패 - 엔트리 없음: {replacement.Key}");
+
+                    byte[] extracted = verifyPak.Extract(verifyEntry);
+                    if (!extracted.AsSpan().SequenceEqual(replacement.Value))
+                    {
+                        throw new InvalidDataException(
+                            $"저장 검증 실패 - 재추출 바이트 불일치: {replacement.Key} / " +
+                            $"expected={replacement.Value.Length:N0}, actual={extracted.Length:N0}");
+                    }
+                }
+            }
         }
         catch
         {
