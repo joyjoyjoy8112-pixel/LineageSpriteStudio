@@ -1,20 +1,23 @@
-Lineage Client Inspector V1.4
+Lineage Client Inspector V1.5
 
-현재 사용 중인 리니지 클라이언트 통합 확인 도구입니다.
-
-[V1.4]
-- 한 화면 통합 구조
-- 왼쪽: 실제 클라 파일 + IDX/PAK 내부 파일 전체 목록
-- 오른쪽: 선택 파일 자동 미리보기
-- HTML/TXT/XML/JSON/INI/JS/CSS/LUA 등 → 텍스트
+[통합 한 화면]
+- 왼쪽: 클라이언트 실제 파일 + IDX/PAK 내부 + Navicat/DB 백업
+- 오른쪽: 선택 항목 자동 미리보기
+- HTML/TXT/XML/JSON/INI/JS/CSS/LUA → 텍스트
 - PNG/BMP/JPG/JPEG/GIF/ICO/TIF/TIFF → 이미지
-- SPR → 프레임 미리보기
-- 그 외 파일 → HEX + ASCII
-- 검색창 하나로 전체 파일 검색
-- 종류 필터: 전체 / 이미지 / HTML/텍스트 / SPR / 기타
-- 기사 확인은 검색창에 61- 입력
-- 선택 원본 저장
-- 선택 파일 SHA-256 확인
-- 실제 파일과 IDX/PAK 내부 파일을 같은 화면에서 확인
+- SPR → 프레임
+- 기타 → HEX + ASCII
+- 검색창 하나로 전체 검색
 
-원본 클라이언트는 수정하지 않는 읽기/검사/추출 전용입니다.
+[Navicat PSC]
+- 상단 '나비캣 PSC 선택' 버튼
+- .psc/.nb3/.sql/.db/.sqlite/.bak/.dump 선택 가능
+- .psc/.nb3가 표준 ZIP 계열로 열리면 내부 항목까지 왼쪽 목록에 표시
+- 내부 텍스트/문자열은 검색 대상에 포함
+- 일반 ZIP으로 직접 안 열리는 PSC도 원본 문자열 + HEX 확인 가능
+- 선택 원본 저장 / SHA-256 확인 가능
+
+[기존]
+- Sprite00~15 / Image00~15 / Data / Tile / Text / Sound 등 IDX/PAK 자동 검사
+- 기사 61은 검색창에 61- 입력
+- 원본 클라이언트는 수정하지 않는 읽기/검사/추출 전용
