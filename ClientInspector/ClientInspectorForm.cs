@@ -720,7 +720,7 @@ internal sealed class ClientInspectorForm : Form
             }
             else if (type == "DB백업")
             {
-                string strings = ExtractPrintableStrings(currentRaw, 400_000);
+                string strings = ExtractMeaningfulAsciiStrings(currentRaw, 400_000);
                 hexPreview.Text =
                     "[PSC/DB 백업 - 읽을 수 있는 문자열]\r\n" +
                     strings +
