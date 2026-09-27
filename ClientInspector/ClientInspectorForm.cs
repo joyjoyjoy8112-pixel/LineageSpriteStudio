@@ -118,6 +118,8 @@ internal sealed class ClientInspectorForm : Form
     private byte[]? currentModifiedImageBytes;
     private string currentModifiedImageFormat = "";
 
+    private readonly SprEditorPanel sprEditor = new() { Dock = DockStyle.Fill, Visible = false };
+
     private readonly PictureBox sprPreview = new()
     {
         Dock = DockStyle.Fill,
@@ -180,7 +182,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V3.0 - 이미지 테스트 원본 저장";
+        Text = "Lineage Client Inspector V3.1 - SPR 수정/저장";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -250,6 +252,7 @@ internal sealed class ClientInspectorForm : Form
 
         previewHost.Controls.Add(textPreview);
         previewHost.Controls.Add(imageCompareHost);
+        previewHost.Controls.Add(sprEditor);
         previewHost.Controls.Add(sprPreview);
         previewHost.Controls.Add(hexPreview);
 
@@ -336,6 +339,7 @@ internal sealed class ClientInspectorForm : Form
         btnColorTest.Click += (_, _) => ApplyColorTest();
         btnResetModifiedImage.Click += (_, _) => ResetModifiedImage();
         btnApplyModifiedImage.Click += async (_, _) => await ApplyModifiedImageAsync();
+        sprEditor.SaveBackAsync = SaveModifiedSprBackAsync;
         btnHash.Click += async (_, _) => await HashSelectedAsync();
 
         grid.DataBindingComplete += (_, _) =>
@@ -2334,24 +2338,20 @@ internal sealed class ClientInspectorForm : Form
             }
             else if (type == "SPR")
             {
+                string sourceText = row.Source == "PAK 내부"
+                    ? $"PAK 내부 | {row.Container}"
+                    : GetOriginalFilePath(row) ?? row.Source;
+
+                sprEditor.LoadSpr(currentRaw, row.Path, sourceText);
+                sprEditor.Visible = true;
+                sprEditor.BringToFront();
+
                 currentSprDecoded = SpriteCodec.DecodeIfNeeded(currentRaw);
                 var info = SprInfo.Analyze(currentSprDecoded);
 
-                numSprFrame.Minimum = 0;
-                numSprFrame.Maximum = Math.Max(0, info.FrameCount - 1);
-                numSprFrame.Value = 0;
-
-                lblSpr.Text = $"총 {info.FrameCount}프레임 | " +
-                              $"{(info.IsPalette ? "Palette " + info.PaletteSize : "RGB555")} | " +
-                              $"Type {info.FrameType} | {(SpriteCodec.IsZlib(currentRaw) ? "ZLIB" : "RAW")}";
-
-                sprBar.Visible = true;
-                sprPreview.Visible = true;
-                sprPreview.BringToFront();
-                await RenderSprFrameAsync();
-
-                if (info.FrameCount > 1)
-                    StartSprAuto();
+                lblInfo.Text += $" | {info.FrameCount}프레임 | " +
+                                $"{(info.IsPalette ? "Palette " + info.PaletteSize : "RGB555")} | " +
+                                $"Type {info.FrameType} | {(SpriteCodec.IsZlib(currentRaw) ? "ZLIB" : "RAW")}";
             }
             else if (type == "DB백업")
             {
@@ -2430,6 +2430,85 @@ internal sealed class ClientInspectorForm : Form
             throw new FileNotFoundException("PAK 내부 파일을 찾을 수 없습니다.", row.Path);
 
         return await Task.Run(() => scanner.Extract(rec));
+    }
+
+    private async Task SaveModifiedSprBackAsync(byte[] storedSpr)
+    {
+        if (currentRow == null)
+            throw new InvalidOperationException("현재 선택된 SPR이 없습니다.");
+
+        if (!currentRow.Extension.Equals(".spr", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("현재 선택 항목이 SPR이 아닙니다.");
+
+        if (currentRow.Source == "실제파일" || currentRow.Source == "서버팩")
+        {
+            string? path = GetOriginalFilePath(currentRow);
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                throw new FileNotFoundException("원본 SPR 파일을 찾을 수 없습니다.", path);
+
+            string firstBackup = path + ".spr.bak";
+            if (!File.Exists(firstBackup))
+                File.Copy(path, firstBackup, false);
+
+            string before = path + ".spr.before_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            File.Copy(path, before, false);
+
+            await File.WriteAllBytesAsync(path, storedSpr);
+
+            currentRaw = (byte[])storedSpr.Clone();
+            currentSprDecoded = SpriteCodec.DecodeIfNeeded(currentRaw);
+            currentRow.SizeBytes = storedSpr.LongLength;
+            grid.Refresh();
+
+            status.Text = $"SPR 원본 저장 완료: {path} | 백업: {firstBackup}";
+            return;
+        }
+
+        if (currentRow.Source == "PAK 내부")
+        {
+            string idxPath = currentRow.SourceKey;
+
+            if (!scanners.TryGetValue(idxPath, out var scanner))
+                throw new InvalidOperationException("선택한 SPR의 IDX/PAK 스캐너를 찾을 수 없습니다.");
+
+            if (!scanner.Format.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || scanner.DesEncrypted)
+            {
+                throw new InvalidOperationException(
+                    $"현재 PAK 형식은 {scanner.Format}{(scanner.DesEncrypted ? " / DES" : "")} 입니다. " +
+                    "V3.1에서는 안전 검증된 비암호화 LEGACY28 PAK의 SPR만 직접 저장합니다.");
+            }
+
+            string pakPath = Path.ChangeExtension(idxPath, ".pak");
+            string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string idxBackup = idxPath + ".sprbak_" + stamp;
+            string pakBackup = pakPath + ".sprbak_" + stamp;
+
+            File.Copy(idxPath, idxBackup, false);
+            File.Copy(pakPath, pakBackup, false);
+
+            using (var pak = new SpritePak(idxPath))
+            {
+                pak.RebuildLegacyPak(new Dictionary<string, byte[]>
+                {
+                    [currentRow.Path] = storedSpr
+                });
+            }
+
+            scanner.Dispose();
+            scanners[idxPath] = new AnyPakScanner(idxPath);
+
+            currentRaw = (byte[])storedSpr.Clone();
+            currentSprDecoded = SpriteCodec.DecodeIfNeeded(currentRaw);
+            currentRow.SizeBytes = storedSpr.LongLength;
+            grid.Refresh();
+
+            status.Text =
+                $"PAK SPR 저장 완료: {currentRow.Path} | IDX/PAK 백업 생성 완료";
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "이 위치의 SPR은 원본에 직접 저장할 수 없습니다. '선택 추출'로 수정 SPR을 저장해 사용할 수 있습니다.");
     }
 
     private void ShowImage(byte[] data)
@@ -2916,6 +2995,7 @@ internal sealed class ClientInspectorForm : Form
     {
         StopSprAuto();
         currentSprDecoded = null;
+        sprEditor.ClearSpr();
 
         if (!editMode)
             textPreview.ReadOnly = true;
