@@ -170,21 +170,33 @@ internal sealed class SpritePak : IDisposable
         return raw;
     }
 
-    public void RebuildLegacyPak(IReadOnlyDictionary<string, byte[]> replacements)
+    public void RebuildPak(IReadOnlyDictionary<string, byte[]> replacements)
     {
-        if (!IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || IsDesEncrypted)
-            throw new InvalidOperationException("안전 재묶기는 비암호화 LEGACY28 Sprite PAK에서만 사용할 수 있습니다.");
+        bool legacy = IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase);
+        bool ext = IndexFormat.Equals("_EXT", StringComparison.OrdinalIgnoreCase);
+
+        if ((!legacy && !ext) || IsDesEncrypted)
+        {
+            throw new InvalidOperationException(
+                $"안전 재묶기 지원 형식이 아닙니다: {IndexFormat}" +
+                (IsDesEncrypted ? " / DES" : "") +
+                ". 지원: 비암호화 LEGACY28, 비암호화 _EXT");
+        }
 
         string tmpPak = PakPath + ".sprite-studio-repack.tmp";
         if (File.Exists(tmpPak)) File.Delete(tmpPak);
 
-        // 원본 offset/size를 먼저 고정해 둔다. Entries는 새 PAK 위치로 갱신된다.
         var originals = Entries
             .Select(e => new
             {
                 Entry = e,
                 Offset = e.Offset,
-                Size = e.FileSize
+                FileSize = e.FileSize,
+                CompressedSize = e.CompressedSize,
+                Flags = e.Flags,
+                StoredSize = (e.Flags == 2 && e.CompressedSize > 0)
+                    ? e.CompressedSize
+                    : e.FileSize
             })
             .ToList();
 
@@ -203,43 +215,107 @@ internal sealed class SpritePak : IDisposable
 
                     if (replacements.TryGetValue(item.Entry.FileName, out var replacement))
                     {
-                        dst.Write(replacement, 0, replacement.Length);
+                        byte[] storedReplacement;
+
+                        if (legacy)
+                        {
+                            storedReplacement = replacement;
+                            item.Entry.FileSize = replacement.Length;
+                            item.Entry.CompressedSize = 0;
+                            item.Entry.Flags = 0;
+                        }
+                        else
+                        {
+                            if (item.Flags == 2 && item.CompressedSize > 0)
+                            {
+                                using var compressed = new MemoryStream();
+                                using (var br = new BrotliStream(
+                                    compressed,
+                                    CompressionLevel.Optimal,
+                                    leaveOpen: true))
+                                {
+                                    br.Write(replacement, 0, replacement.Length);
+                                }
+
+                                storedReplacement = compressed.ToArray();
+                                item.Entry.FileSize = replacement.Length;
+                                item.Entry.CompressedSize = storedReplacement.Length;
+                                item.Entry.Flags = 2;
+                            }
+                            else if (item.Flags == 0)
+                            {
+                                storedReplacement = replacement;
+                                item.Entry.FileSize = replacement.Length;
+                                item.Entry.CompressedSize = 0;
+                                item.Entry.Flags = 0;
+                            }
+                            else
+                            {
+                                throw new InvalidOperationException(
+                                    $"_EXT 엔트리의 미지원 압축 플래그입니다: {item.Entry.FileName} / Flags={item.Flags}");
+                            }
+                        }
+
+                        dst.Write(storedReplacement, 0, storedReplacement.Length);
                         item.Entry.Offset = newOffset;
-                        item.Entry.FileSize = replacement.Length;
                     }
                     else
                     {
-                        if (item.Offset < 0 || item.Size < 0 || item.Offset + item.Size > src.Length)
-                            throw new InvalidDataException($"원본 PAK 범위 오류: {item.Entry.FileName}");
+                        if (item.Offset < 0 || item.StoredSize < 0 ||
+                            item.Offset + item.StoredSize > src.Length)
+                        {
+                            throw new InvalidDataException(
+                                $"원본 PAK 범위 오류: {item.Entry.FileName}");
+                        }
 
                         src.Position = item.Offset;
-                        int remain = item.Size;
+                        int remain = item.StoredSize;
+
                         while (remain > 0)
                         {
                             int want = Math.Min(buffer.Length, remain);
                             int read = src.Read(buffer, 0, want);
                             if (read <= 0)
-                                throw new EndOfStreamException($"원본 PAK 읽기 실패: {item.Entry.FileName}");
+                                throw new EndOfStreamException(
+                                    $"원본 PAK 읽기 실패: {item.Entry.FileName}");
+
                             dst.Write(buffer, 0, read);
                             remain -= read;
                         }
 
                         item.Entry.Offset = newOffset;
-                        item.Entry.FileSize = item.Size;
+                        item.Entry.FileSize = item.FileSize;
+                        item.Entry.CompressedSize = item.CompressedSize;
+                        item.Entry.Flags = item.Flags;
                     }
                 }
 
                 dst.Flush(true);
             }
 
+            // PAK을 먼저 완성한 뒤 교체하고, 새 offset/size로 IDX를 저장한다.
             File.Move(tmpPak, PakPath, true);
             SaveIndex();
         }
         catch
         {
-            try { if (File.Exists(tmpPak)) File.Delete(tmpPak); } catch { }
+            try
+            {
+                if (File.Exists(tmpPak))
+                    File.Delete(tmpPak);
+            }
+            catch { }
+
             throw;
         }
+    }
+
+    public void RebuildLegacyPak(IReadOnlyDictionary<string, byte[]> replacements)
+    {
+        if (!IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || IsDesEncrypted)
+            throw new InvalidOperationException("비암호화 LEGACY28 PAK이 아닙니다.");
+
+        RebuildPak(replacements);
     }
 
     public long AppendRaw(byte[] rawData)
