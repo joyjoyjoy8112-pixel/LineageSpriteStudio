@@ -7,17 +7,22 @@
     <Nullable>enable</Nullable>
     <AssemblyName>LineageClientInspector</AssemblyName>
     <RootNamespace>LineageSpriteStudio</RootNamespace>
-    <Version>3.0.0</Version>
-    <FileVersion>2.3.0.0</FileVersion>
-    <AssemblyVersion>2.3.0.0</AssemblyVersion>
+    <Version>3.1.0</Version>
+    <FileVersion>3.1.0.0</FileVersion>
+    <AssemblyVersion>3.1.0.0</AssemblyVersion>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>false</PublishSingleFile>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="SprInfo.cs" />
     <Compile Include="..\AnyPakScanner.cs" Link="AnyPakScanner.cs" />
     <Compile Include="..\SpritePak.cs" Link="SpritePak.cs" />
     <Compile Include="..\SprDecoder.cs" Link="SprDecoder.cs" />
+    <Compile Include="..\SprEncoder.cs" Link="SprEncoder.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
   </ItemGroup>
 </Project>
