@@ -1,0 +1,38 @@
+name: Build Lineage Client Inspector
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ClientInspector/**'
+      - 'AnyPakScanner.cs'
+      - 'SpritePak.cs'
+      - 'SprDecoder.cs'
+      - '.github/workflows/client-inspector-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish win-x64
+        run: dotnet publish ClientInspector/LineageClientInspector.csproj -c Release -r win-x64 --self-contained true -o publish-inspector
+
+      - name: Add README
+        shell: pwsh
+        run: Copy-Item ClientInspector/README_현재클라_전체확인.txt publish-inspector/README_현재클라_전체확인.txt -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lineage_Client_Inspector_V1.0_win-x64
+          path: publish-inspector
+          if-no-files-found: error
