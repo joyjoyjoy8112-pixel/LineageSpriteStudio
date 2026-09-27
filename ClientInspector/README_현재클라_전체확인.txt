@@ -1,45 +1,25 @@
-Lineage Client Inspector V2.5
+Lineage Client Inspector V2.6
 
-[편집 범위 확대]
-- 알려진 텍스트 확장자뿐 아니라 실제 내용이 텍스트로 판별되는 파일도 원본 수정 가능
-- 바이너리 확장자(.class/.jar/.exe/.dll/.pak/.idx/.spr/.psc/이미지 등)는 직접 텍스트 편집 제외
-- 20MB 이하 원본 파일만 직접 편집
-- Ctrl+S 저장 / Esc 취소
-- 최초 저장 시 .bak 자동 백업
-- 원본 복원(.bak) + .before_restore 안전 백업
+[파일명 검색 규칙 수정]
+- 파일명/내부경로 검색은 부분 포함이 아니라 '파일명 시작일치' 사용
+- 예: 61- 검색
+  포함: 61-0.spr, 61-1.spr, 61-167.spr
+  제외: abc61-0.spr, ***61-0.spr, x61-0.spr
+- 경로 중간에 검색어가 들어가도 파일명 자체가 검색어로 시작하지 않으면 제외
 
-[Java 단일 파일 컴파일]
-서버팩 폴더의 .java 파일에서
-파일/내부경로 우클릭 → '이 Java 파일 컴파일'
-- JDK javac.exe 자동 검색(JAVA_HOME 또는 PATH)
-- EUC-KR / Java 8(-source 1.8 -target 1.8)
-- 서버팩 bin + lib JAR + l1jserver.jar를 classpath로 사용
-- 임시 폴더에서 먼저 컴파일
-- 성공한 .class만 bin에 반영
-- 기존 class는 최초 반영 시 .bak 생성
-- 실패 시 기존 class 변경 없음
-- 컴파일 로그를 오른쪽 화면에 실시간 표시
+[숫자- 접두어 검색]
+- 61-, 61-0, 14592- 같은 '숫자-' 형태는 파일/GFX/SPR 접두어 검색 모드로 처리
+- 이 모드에서는 DB PSC/SQL/본문의 부분 일치를 검색하지 않음
+- 따라서 61- 검색 시 서버 설정/DB 문자열의 우연한 61- 결과가 섞이지 않음
 
-[서버 전체 컴파일]
-파일/내부경로 우클릭 → '서버 전체 컴파일 + JAR 생성'
-- src 아래 전체 .java 검색
-- 서버팩 build.xml과 동일하게 EUC-KR / Java 8 기준으로 javac 실행
-- lib 폴더 JAR를 classpath에 사용
-- 전체 컴파일을 임시 폴더에서 수행
-- 성공 후 jar.exe로 l1jserver.jar 임시 생성
-- 컴파일과 JAR 생성이 모두 성공한 경우에만 기존 l1jserver.jar 교체
-- 기존 JAR는 l1jserver.jar.bak_날짜시간 으로 자동 백업
-- 실패 시 기존 l1jserver.jar 유지
-
-[필요 조건]
-- JRE만으로는 컴파일 불가
-- JDK 8 설치 필요
-- JAVA_HOME 또는 PATH에서 javac.exe와 jar.exe를 찾을 수 있어야 함
+[다른 검색]
+- 일반 텍스트 본문 검색 규칙은 기존 유지
+- DB ID 정확 검색 규칙 유지
+- 3000209 같은 ID는 DB/서버/클라 통합 검색 유지
 
 [기존 기능 유지]
-- 클라 + 서버팩 + Navicat DB 통합 검색
+- 클라 + 서버 + Navicat DB 통합 검색
 - 검색 위치 실시간 표시
-- 서버팩 PSC 검색
-- 이름 복사
-- 정확 검색
-- 원본 수정/복원
+- 원본 파일 수정 / .bak 복원
+- Java 단일 컴파일
+- 서버 전체 컴파일 + l1jserver.jar 생성
