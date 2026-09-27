@@ -182,7 +182,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V3.1 - SPR 수정/저장";
+        Text = "Lineage Client Inspector V3.2 - EXT PAK SPR 저장";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -2471,11 +2471,15 @@ internal sealed class ClientInspectorForm : Form
             if (!scanners.TryGetValue(idxPath, out var scanner))
                 throw new InvalidOperationException("선택한 SPR의 IDX/PAK 스캐너를 찾을 수 없습니다.");
 
-            if (!scanner.Format.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || scanner.DesEncrypted)
+            bool supportedPak =
+                scanner.Format.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) ||
+                scanner.Format.Equals("_EXT", StringComparison.OrdinalIgnoreCase);
+
+            if (!supportedPak || scanner.DesEncrypted)
             {
                 throw new InvalidOperationException(
                     $"현재 PAK 형식은 {scanner.Format}{(scanner.DesEncrypted ? " / DES" : "")} 입니다. " +
-                    "V3.1에서는 안전 검증된 비암호화 LEGACY28 PAK의 SPR만 직접 저장합니다.");
+                    "V3.2에서는 비암호화 LEGACY28 및 비암호화 _EXT PAK의 SPR 저장을 지원합니다.");
             }
 
             string pakPath = Path.ChangeExtension(idxPath, ".pak");
@@ -2488,7 +2492,7 @@ internal sealed class ClientInspectorForm : Form
 
             using (var pak = new SpritePak(idxPath))
             {
-                pak.RebuildLegacyPak(new Dictionary<string, byte[]>
+                pak.RebuildPak(new Dictionary<string, byte[]>
                 {
                     [currentRow.Path] = storedSpr
                 });
@@ -2887,11 +2891,15 @@ internal sealed class ClientInspectorForm : Form
                 if (!scanners.TryGetValue(currentRow.SourceKey, out var scanner))
                     throw new InvalidOperationException("선택한 PAK 정보를 찾지 못했습니다.");
 
-                if (!scanner.Format.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || scanner.DesEncrypted)
+                bool supportedPak =
+                    scanner.Format.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) ||
+                    scanner.Format.Equals("_EXT", StringComparison.OrdinalIgnoreCase);
+
+                if (!supportedPak || scanner.DesEncrypted)
                 {
                     MessageBox.Show(this,
                         $"현재 PAK 형식은 {scanner.Format}{(scanner.DesEncrypted ? " / DES" : "")} 입니다.\n" +
-                        "안전하게 검증된 LEGACY28 비암호화 PAK만 직접 재등록합니다.\n" +
+                        "V3.2에서는 비암호화 LEGACY28 및 비암호화 _EXT PAK만 직접 재등록합니다.\n" +
                         "수정본은 오른쪽에서 확인하거나 '선택 추출'로 저장할 수 있습니다.",
                         "PAK 직접 등록 제한",
                         MessageBoxButtons.OK,
@@ -2909,7 +2917,7 @@ internal sealed class ClientInspectorForm : Form
                 File.Copy(pakPath, pakBackup, false);
 
                 using var pak = new SpritePak(idxPath);
-                pak.RebuildLegacyPak(new Dictionary<string, byte[]>
+                pak.RebuildPak(new Dictionary<string, byte[]>
                 {
                     [currentRow.Path] = replacement
                 });
