@@ -113,7 +113,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V1.7 - 의미있는 통합 검색";
+        Text = "Lineage Client Inspector V1.8 - 클라 + DB 행 통합 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -499,10 +499,27 @@ internal sealed class ClientInspectorForm : Form
         try
         {
             var results = new List<ViewRow>();
-            int total = allRows.Count;
+
+            var sqlBackups = allRows
+                .Where(r => r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var sql in sqlBackups)
+            {
+                var sqlMatches = await Task.Run(() => SearchSqlDump(sql.SourceKey, q));
+                results.AddRange(sqlMatches);
+                status.Text = $"SQL 검색: {Path.GetFileName(sql.SourceKey)} | 발견 {results.Count:N0}";
+                Application.DoEvents();
+            }
+
+            var searchableRows = allRows
+                .Where(r => !(r.Source == "DB백업" && r.Extension.Equals(".sql", StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            int total = searchableRows.Count;
             int done = 0;
 
-            foreach (var row in allRows)
+            foreach (var row in searchableRows)
             {
                 string? match = null;
 
@@ -552,6 +569,75 @@ internal sealed class ClientInspectorForm : Form
         {
             SetBusy(false);
         }
+    }
+
+    private static List<ViewRow> SearchSqlDump(string path, string query)
+    {
+        var results = new List<ViewRow>();
+        if (!File.Exists(path) || string.IsNullOrWhiteSpace(query))
+            return results;
+
+        int lineNo = 0;
+
+        using var sr = new StreamReader(path, new UTF8Encoding(false, false), detectEncodingFromByteOrderMarks: true);
+
+        while (sr.ReadLine() is string line)
+        {
+            lineNo++;
+
+            if (!line.Contains(query, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string trimmed = line.TrimStart();
+
+            if (trimmed.StartsWith("INSERT INTO ", StringComparison.OrdinalIgnoreCase))
+            {
+                string table = ExtractSqlTableName(trimmed);
+
+                results.Add(new ViewRow
+                {
+                    Source = "DB SQL",
+                    Type = "DB백업",
+                    Path = string.IsNullOrWhiteSpace(table) ? $"SQL 행 {lineNo:N0}" : table,
+                    Container = $"{Path.GetFileName(path)} | line {lineNo:N0}",
+                    Extension = ".sql",
+                    SizeBytes = Encoding.UTF8.GetByteCount(line),
+                    SourceKey = path,
+                    SearchText = line,
+                    Match = $"DB 행 | {table} | line {lineNo:N0}"
+                });
+            }
+            else
+            {
+                results.Add(new ViewRow
+                {
+                    Source = "DB SQL",
+                    Type = "DB백업",
+                    Path = $"SQL line {lineNo:N0}",
+                    Container = Path.GetFileName(path),
+                    Extension = ".sql",
+                    SizeBytes = Encoding.UTF8.GetByteCount(line),
+                    SourceKey = path,
+                    SearchText = line,
+                    Match = $"DB SQL 텍스트 | line {lineNo:N0}"
+                });
+            }
+
+            if (results.Count >= 10000)
+                break;
+        }
+
+        return results;
+    }
+
+    private static string ExtractSqlTableName(string line)
+    {
+        char tick = (char)96;
+        int first = line.IndexOf(tick);
+        if (first < 0) return "";
+        int second = line.IndexOf(tick, first + 1);
+        if (second <= first) return "";
+        return line[(first + 1)..second];
     }
 
     private static bool ShouldContentSearch(ViewRow row)
@@ -680,8 +766,10 @@ internal sealed class ClientInspectorForm : Form
             currentRaw = await ReadBytesAsync(row);
             currentName = Path.GetFileName(row.Path);
 
-            string type = DetectTypeFromData(row.Path, currentRaw);
-            row.Type = type;
+            string type = row.Source == "DB SQL"
+                ? "HTML/텍스트"
+                : DetectTypeFromData(row.Path, currentRaw);
+            row.Type = row.Source == "DB SQL" ? "DB백업" : type;
 
             ClearPreview();
 
@@ -761,6 +849,9 @@ internal sealed class ClientInspectorForm : Form
 
         if (row.Source == "DB백업")
             return await File.ReadAllBytesAsync(row.SourceKey);
+
+        if (row.Source == "DB SQL")
+            return Encoding.UTF8.GetBytes(row.SearchText ?? "");
 
         if (row.Source == "PSC 내부" && row.SourceKey.StartsWith("PSCZIP|", StringComparison.Ordinal))
         {
