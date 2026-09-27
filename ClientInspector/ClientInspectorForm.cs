@@ -11,7 +11,8 @@ internal sealed class ClientInspectorForm : Form
     private readonly Button btnBrowse = new() { Text = "클라 폴더 선택", AutoSize = true };
     private readonly Button btnScan = new() { Text = "전체 검사", AutoSize = true };
     private readonly Button btnDbBackup = new() { Text = "나비캣 PSC 선택", AutoSize = true };
-    private readonly TextBox txtSearch = new() { Width = 260, PlaceholderText = "파일명 검색 (예: 61- / .png / autohunt)" };
+    private readonly TextBox txtSearch = new() { Width = 260, PlaceholderText = "통합 검색 (예: 3000209 / autohunt / 61-)" };
+    private readonly Button btnGlobalSearch = new() { Text = "통합 검색", AutoSize = true };
     private readonly ComboBox cboType = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
     private readonly Button btnSave = new() { Text = "선택 원본 저장", AutoSize = true };
     private readonly Button btnHash = new() { Text = "SHA-256", AutoSize = true };
@@ -88,6 +89,7 @@ internal sealed class ClientInspectorForm : Form
 
     private readonly List<ViewRow> allRows = new();
     private List<ViewRow> currentRows = new();
+    private List<ViewRow>? globalSearchResults;
     private readonly Dictionary<string, AnyPakScanner> scanners = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ViewRow> externalBackupRows = new();
 
@@ -125,20 +127,21 @@ internal sealed class ClientInspectorForm : Form
         {
             Dock = DockStyle.Top,
             Height = 44,
-            ColumnCount = 9,
+            ColumnCount = 10,
             Padding = new Padding(6)
         };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 1; i < 9; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 1; i < 10; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.Controls.Add(txtRoot, 0, 0);
         top.Controls.Add(btnBrowse, 1, 0);
         top.Controls.Add(btnScan, 2, 0);
         top.Controls.Add(btnDbBackup, 3, 0);
         top.Controls.Add(cboType, 4, 0);
         top.Controls.Add(txtSearch, 5, 0);
-        top.Controls.Add(btnHash, 6, 0);
-        top.Controls.Add(btnSave, 7, 0);
-        top.Controls.Add(lblCount, 8, 0);
+        top.Controls.Add(btnGlobalSearch, 6, 0);
+        top.Controls.Add(btnHash, 7, 0);
+        top.Controls.Add(btnSave, 8, 0);
+        top.Controls.Add(lblCount, 9, 0);
 
         var split = new SplitContainer
         {
@@ -176,7 +179,15 @@ internal sealed class ClientInspectorForm : Form
         btnBrowse.Click += (_, _) => ChooseFolder();
         btnScan.Click += async (_, _) => await ScanAsync();
         btnDbBackup.Click += async (_, _) => await ChooseDbBackupsAsync();
-        txtSearch.TextChanged += (_, _) => ApplyFilter();
+        btnGlobalSearch.Click += async (_, _) => await GlobalSearchAsync();
+        txtSearch.KeyDown += async (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                await GlobalSearchAsync();
+            }
+        };
         cboType.SelectedIndexChanged += (_, _) => ApplyFilter();
         grid.SelectionChanged += async (_, _) => await PreviewSelectedAsync();
         numSprFrame.ValueChanged += async (_, _) => await RenderSprFrameAsync();
@@ -231,6 +242,7 @@ internal sealed class ClientInspectorForm : Form
             foreach (var scanner in scanners.Values) scanner.Dispose();
             scanners.Clear();
             allRows.Clear();
+            globalSearchResults = null;
             currentRaw = null;
             currentRow = null;
             ClearPreview();
@@ -242,6 +254,7 @@ internal sealed class ClientInspectorForm : Form
 
             allRows.AddRange(result.Rows);
             allRows.AddRange(externalBackupRows);
+            globalSearchResults = null;
             ApplyFilter();
 
             status.Text = $"완료: 전체 {allRows.Count:N0}개";
@@ -376,6 +389,7 @@ internal sealed class ClientInspectorForm : Form
                 allRows.AddRange(externalBackupRows);
             }
 
+            globalSearchResults = null;
             ApplyFilter();
             status.Text = $"DB 백업 추가 완료: {dlg.FileNames.Length}개, 표시 항목 {externalBackupRows.Count:N0}개";
         }
@@ -440,21 +454,219 @@ internal sealed class ClientInspectorForm : Form
 
     private void ApplyFilter()
     {
-        string q = txtSearch.Text.Trim();
         string type = cboType.SelectedItem?.ToString() ?? "전체";
+        IEnumerable<ViewRow> source = globalSearchResults ?? allRows;
 
-        currentRows = allRows
+        currentRows = source
             .Where(r => type == "전체" || r.Type == type)
-            .Where(r => q.Length == 0 ||
-                        r.Path.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                        r.Container.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                        r.Extension.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                        r.SearchText.Contains(q, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         grid.DataSource = null;
         grid.DataSource = new BindingList<ViewRow>(currentRows);
-        lblCount.Text = $"{currentRows.Count:N0}/{allRows.Count:N0}";
+
+        if (globalSearchResults != null)
+            lblCount.Text = $"검색 {currentRows.Count:N0}/{globalSearchResults.Count:N0}";
+        else
+            lblCount.Text = $"{currentRows.Count:N0}/{allRows.Count:N0}";
+    }
+
+    private async Task GlobalSearchAsync()
+    {
+        string q = txtSearch.Text.Trim();
+
+        foreach (var row in allRows)
+            row.Match = "";
+
+        if (q.Length == 0)
+        {
+            globalSearchResults = null;
+            ApplyFilter();
+            status.Text = "통합 검색 초기화";
+            return;
+        }
+
+        SetBusy(true, $"통합 검색 중: {q}");
+
+        try
+        {
+            var results = new List<ViewRow>();
+            int total = allRows.Count;
+            int done = 0;
+
+            foreach (var row in allRows)
+            {
+                string? match = null;
+
+                if (row.Path.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    row.Container.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    row.Extension.Contains(q, StringComparison.OrdinalIgnoreCase))
+                {
+                    match = "파일명/경로";
+                }
+                else if (!string.IsNullOrEmpty(row.SearchText) &&
+                         row.SearchText.Contains(q, StringComparison.OrdinalIgnoreCase))
+                {
+                    match = "미리색인 내용";
+                }
+                else if (ShouldContentSearch(row))
+                {
+                    long offset = await FindContentOffsetAsync(row, q);
+                    if (offset >= 0)
+                        match = $"파일 내용 @ 0x{offset:X}";
+                }
+
+                if (match != null)
+                {
+                    row.Match = match;
+                    results.Add(row);
+                }
+
+                done++;
+                if (done % 50 == 0 || done == total)
+                {
+                    progress.Value = total == 0 ? 0 : Math.Min(100, (int)(done * 100L / total));
+                    status.Text = $"통합 검색 {done:N0}/{total:N0} | 발견 {results.Count:N0}";
+                    Application.DoEvents();
+                }
+            }
+
+            globalSearchResults = results;
+            ApplyFilter();
+            status.Text = $"통합 검색 완료: '{q}' → {results.Count:N0}건";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.ToString(), "통합 검색 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            status.Text = "통합 검색 실패";
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private static bool ShouldContentSearch(ViewRow row)
+    {
+        string ext = row.Extension.ToLowerInvariant();
+
+        // PAK/IDX 컨테이너 자체는 이미 내부 항목으로 풀어서 별도 검색하므로 중복 대용량 검색을 피한다.
+        if (row.Source == "실제파일" && (ext == ".pak" || ext == ".idx"))
+            return false;
+
+        // 그림/사운드/스프라이트의 픽셀·오디오 페이로드는 문자열 정보 검색 대상에서 제외한다.
+        if (ext is ".png" or ".bmp" or ".jpg" or ".jpeg" or ".gif" or ".ico" or ".tif" or ".tiff" or
+                   ".spr" or ".wav" or ".mp3" or ".ogg")
+            return false;
+
+        return true;
+    }
+
+    private async Task<long> FindContentOffsetAsync(ViewRow row, string query)
+    {
+        var patterns = BuildSearchPatterns(query);
+        if (patterns.Count == 0) return -1;
+
+        if (row.Source == "실제파일" || row.Source == "DB백업")
+        {
+            string path = row.Source == "실제파일"
+                ? Path.Combine(rootPath!, row.SourceKey)
+                : row.SourceKey;
+
+            return await Task.Run(() => FindInFile(path, patterns));
+        }
+
+        byte[] data;
+        try
+        {
+            data = await ReadBytesAsync(row);
+        }
+        catch
+        {
+            return -1;
+        }
+
+        return FindInBytes(data, patterns);
+    }
+
+    private static List<byte[]> BuildSearchPatterns(string query)
+    {
+        var list = new List<byte[]>();
+
+        void Add(byte[] bytes)
+        {
+            if (bytes.Length == 0) return;
+            if (!list.Any(x => x.AsSpan().SequenceEqual(bytes)))
+                list.Add(bytes);
+        }
+
+        Add(Encoding.UTF8.GetBytes(query));
+        Add(Encoding.Unicode.GetBytes(query));
+
+        try { Add(Encoding.GetEncoding(949).GetBytes(query)); } catch { }
+
+        if (query.All(c => c <= 0x7F))
+            Add(Encoding.ASCII.GetBytes(query));
+
+        return list;
+    }
+
+    private static long FindInFile(string path, List<byte[]> patterns)
+    {
+        if (!File.Exists(path)) return -1;
+
+        int maxPattern = patterns.Max(p => p.Length);
+        int overlap = Math.Max(0, maxPattern - 1);
+        const int ChunkSize = 1024 * 1024;
+
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+            ChunkSize, FileOptions.SequentialScan);
+
+        byte[] buffer = new byte[ChunkSize + overlap];
+        int carry = 0;
+        long absolute = 0;
+
+        while (true)
+        {
+            int read = fs.Read(buffer, carry, ChunkSize);
+            if (read <= 0) break;
+
+            int length = carry + read;
+            var span = buffer.AsSpan(0, length);
+
+            foreach (var pattern in patterns)
+            {
+                int idx = span.IndexOf(pattern);
+                if (idx >= 0)
+                    return absolute - carry + idx;
+            }
+
+            if (overlap > 0)
+            {
+                carry = Math.Min(overlap, length);
+                Buffer.BlockCopy(buffer, length - carry, buffer, 0, carry);
+            }
+            else
+            {
+                carry = 0;
+            }
+
+            absolute += read;
+        }
+
+        return -1;
+    }
+
+    private static long FindInBytes(byte[] data, List<byte[]> patterns)
+    {
+        ReadOnlySpan<byte> span = data;
+
+        foreach (var pattern in patterns)
+        {
+            int idx = span.IndexOf(pattern);
+            if (idx >= 0) return idx;
+        }
+
+        return -1;
     }
 
     private async Task PreviewSelectedAsync()
@@ -816,6 +1028,7 @@ internal sealed class ClientInspectorForm : Form
         btnBrowse.Enabled = !busy;
         btnScan.Enabled = !busy;
         btnDbBackup.Enabled = !busy;
+        btnGlobalSearch.Enabled = !busy;
         btnSave.Enabled = !busy;
         btnHash.Enabled = !busy;
 
@@ -841,6 +1054,7 @@ internal sealed class ClientInspectorForm : Form
         [DisplayName("IDX/PAK")] public string Container { get; set; } = "";
         [DisplayName("확장자")] public string Extension { get; set; } = "";
         [DisplayName("크기")] public long SizeBytes { get; set; }
+        [DisplayName("검색일치")] public string Match { get; set; } = "";
         [Browsable(false)] public string SourceKey { get; set; } = "";
         [Browsable(false)] public string SearchText { get; set; } = "";
     }
