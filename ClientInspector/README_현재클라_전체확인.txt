@@ -1,36 +1,45 @@
-Lineage Client Inspector V2.4
+Lineage Client Inspector V2.5
 
-[검색 위치 실시간 표시]
-하단 상태바에 아래 3개 영역을 각각 표시합니다.
-- 클라: 대기 / 검색중 / 완료 N건 / 미선택
-- 서버: 대기 / 검색중 / 완료 N건 / 미선택
-- DB: 대기 / 검색중 / 완료 N건 / 미선택
+[편집 범위 확대]
+- 알려진 텍스트 확장자뿐 아니라 실제 내용이 텍스트로 판별되는 파일도 원본 수정 가능
+- 바이너리 확장자(.class/.jar/.exe/.dll/.pak/.idx/.spr/.psc/이미지 등)는 직접 텍스트 편집 제외
+- 20MB 이하 원본 파일만 직접 편집
+- Ctrl+S 저장 / Esc 취소
+- 최초 저장 시 .bak 자동 백업
+- 원본 복원(.bak) + .before_restore 안전 백업
 
-[통합 검색 진행]
-검색 순서를 영역별로 분리해 현재 위치를 정확하게 표시합니다.
-1. Navicat/DB 백업
-2. 서버팩 폴더
-3. 클라이언트 + IDX/PAK 내부
+[Java 단일 파일 컴파일]
+서버팩 폴더의 .java 파일에서
+파일/내부경로 우클릭 → '이 Java 파일 컴파일'
+- JDK javac.exe 자동 검색(JAVA_HOME 또는 PATH)
+- EUC-KR / Java 8(-source 1.8 -target 1.8)
+- 서버팩 bin + lib JAR + l1jserver.jar를 classpath로 사용
+- 임시 폴더에서 먼저 컴파일
+- 성공한 .class만 bin에 반영
+- 기존 class는 최초 반영 시 .bak 생성
+- 실패 시 기존 class 변경 없음
+- 컴파일 로그를 오른쪽 화면에 실시간 표시
 
-검색 중 예:
-DB: 검색중... (3)
-서버: 대기
-클라: 대기
+[서버 전체 컴파일]
+파일/내부경로 우클릭 → '서버 전체 컴파일 + JAR 생성'
+- src 아래 전체 .java 검색
+- 서버팩 build.xml과 동일하게 EUC-KR / Java 8 기준으로 javac 실행
+- lib 폴더 JAR를 classpath에 사용
+- 전체 컴파일을 임시 폴더에서 수행
+- 성공 후 jar.exe로 l1jserver.jar 임시 생성
+- 컴파일과 JAR 생성이 모두 성공한 경우에만 기존 l1jserver.jar 교체
+- 기존 JAR는 l1jserver.jar.bak_날짜시간 으로 자동 백업
+- 실패 시 기존 l1jserver.jar 유지
 
-검색 완료 예:
-DB: 완료 3건 | 서버: 완료 5건 | 클라: 완료 7건
-
-검색 결과 상태 문구에도
-클라 N / 서버 N / DB N
-형태로 영역별 발견 건수를 표시합니다.
+[필요 조건]
+- JRE만으로는 컴파일 불가
+- JDK 8 설치 필요
+- JAVA_HOME 또는 PATH에서 javac.exe와 jar.exe를 찾을 수 있어야 함
 
 [기존 기능 유지]
+- 클라 + 서버팩 + Navicat DB 통합 검색
+- 검색 위치 실시간 표시
+- 서버팩 PSC 검색
+- 이름 복사
 - 정확 검색
-- 클라이언트 + PAK + DB + 서버팩 폴더 통합 검색
-- 서버팩 내부 PSC 검색
-- 파일/내부경로 우클릭 이름 복사
-- 원본 파일 수정
-- Ctrl+S 저장 / Esc 취소
-- .bak 자동 백업
-- 원본 복원(.bak)
-- 복원 직전 .before_restore 백업
+- 원본 수정/복원
