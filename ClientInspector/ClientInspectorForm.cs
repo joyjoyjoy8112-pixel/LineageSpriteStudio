@@ -105,7 +105,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly Button btnLoadModifiedImage = new() { Text = "수정 이미지 불러오기", AutoSize = true };
     private readonly Button btnColorTest = new() { Text = "원본 색상 변경 테스트", AutoSize = true };
     private readonly Button btnResetModifiedImage = new() { Text = "수정본 초기화", AutoSize = true };
-    private readonly Button btnApplyModifiedImage = new() { Text = "수정본 등록", AutoSize = true };
+    private readonly Button btnApplyModifiedImage = new() { Text = "현재 수정본 원본에 저장", AutoSize = true };
     private readonly Label lblColorTestGuide = new()
     {
         Text = "※ 왼쪽 원본 유지 / 오른쪽 수정본에만 색상 적용",
@@ -180,7 +180,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.9 - 원본 색상 변경 테스트";
+        Text = "Lineage Client Inspector V3.0 - 이미지 테스트 원본 저장";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -2778,7 +2778,7 @@ internal sealed class ClientInspectorForm : Form
             $"크기: {currentModifiedBitmap.Width}×{currentModifiedBitmap.Height}\n" +
             $"포맷: {originalFormat}\n\n" +
             "적용 전에 자동 백업합니다. 계속할까요?",
-            "수정본 등록",
+            "현재 수정본 원본에 저장",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question);
 
@@ -2849,7 +2849,7 @@ internal sealed class ClientInspectorForm : Form
             {
                 MessageBox.Show(this,
                     "이 위치의 이미지는 직접 원본 등록 대상이 아닙니다.\n수정본을 추출해서 사용할 수 있습니다.",
-                    "수정본 등록",
+                    "현재 수정본 원본에 저장",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
                 return;
@@ -2860,16 +2860,16 @@ internal sealed class ClientInspectorForm : Form
             lblImageModifiedInfo.Text += "\r\n원본 등록 완료";
 
             MessageBox.Show(this,
-                "수정 이미지 등록이 완료되었습니다.\n자동 백업도 생성했습니다.",
-                "등록 완료",
+                "현재 수정본을 원본에 저장했습니다.\n자동 백업도 생성했습니다.",
+                "원본 저장 완료",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.ToString(), "수정 이미지 등록 실패",
+            MessageBox.Show(this, ex.ToString(), "현재 수정본 원본 저장 실패",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
-            status.Text = "수정 이미지 등록 실패";
+            status.Text = "현재 수정본 원본 저장 실패";
         }
     }
 
