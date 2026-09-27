@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.IO.Compression;
@@ -107,6 +108,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly List<ViewRow> externalServerRows = new();
 
     private string? rootPath;
+    private string? serverRootPath;
     private byte[]? currentRaw;
     private string currentName = "selected.bin";
     private ViewRow? currentRow;
@@ -127,7 +129,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.4 - 검색 위치 실시간 표시";
+        Text = "Lineage Client Inspector V2.5 - 수정 + Java 컴파일";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -206,14 +208,25 @@ internal sealed class ClientInspectorForm : Form
         var restoreOriginalItem = new ToolStripMenuItem("원본 복원 (.bak)");
         restoreOriginalItem.Click += async (_, _) => await RestoreOriginalAsync();
 
+        var compileJavaItem = new ToolStripMenuItem("이 Java 파일 컴파일");
+        compileJavaItem.Click += async (_, _) => await CompileSelectedJavaAsync();
+
+        var compileServerItem = new ToolStripMenuItem("서버 전체 컴파일 + JAR 생성");
+        compileServerItem.Click += async (_, _) => await CompileWholeServerAsync();
+
         filePathMenu.Items.Add(copyNameItem);
         filePathMenu.Items.Add(new ToolStripSeparator());
         filePathMenu.Items.Add(editOriginalItem);
         filePathMenu.Items.Add(restoreOriginalItem);
+        filePathMenu.Items.Add(new ToolStripSeparator());
+        filePathMenu.Items.Add(compileJavaItem);
+        filePathMenu.Items.Add(compileServerItem);
         filePathMenu.Opening += (_, _) =>
         {
             editOriginalItem.Enabled = contextMenuRow != null && CanEditOriginal(contextMenuRow);
             restoreOriginalItem.Enabled = contextMenuRow != null && CanRestoreOriginal(contextMenuRow);
+            compileJavaItem.Enabled = contextMenuRow != null && CanCompileJava(contextMenuRow);
+            compileServerItem.Enabled = CanCompileWholeServer();
         };
 
         grid.CellMouseDown += Grid_CellMouseDown;
@@ -365,21 +378,475 @@ internal sealed class ClientInspectorForm : Form
 
     private bool CanEditOriginal(ViewRow row)
     {
-        if (!TextExtensions.Contains(row.Extension))
-            return false;
-
         string? path = GetOriginalFilePath(row);
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             return false;
 
+        string ext = Path.GetExtension(path);
+
+        if (IsKnownBinaryExtension(ext))
+            return false;
+
         try
         {
-            return new FileInfo(path).Length <= 20L * 1024 * 1024;
+            var fi = new FileInfo(path);
+            if (fi.Length > 20L * 1024 * 1024)
+                return false;
+
+            if (TextExtensions.Contains(ext))
+                return true;
+
+            int sampleLength = (int)Math.Min(fi.Length, 64 * 1024);
+            byte[] sample = new byte[sampleLength];
+
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            int read = fs.Read(sample, 0, sample.Length);
+
+            if (read != sample.Length)
+                Array.Resize(ref sample, read);
+
+            return LooksLikeEditableText(sample);
         }
         catch
         {
             return false;
         }
+    }
+
+    private static bool IsKnownBinaryExtension(string ext)
+    {
+        return ext.Equals(".class", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".jar", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".exe", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".pak", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".idx", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".spr", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".psc", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".nb3", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".db", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".sqlite", StringComparison.OrdinalIgnoreCase) ||
+               ImageExtensions.Contains(ext);
+    }
+
+    private static bool LooksLikeEditableText(byte[] data)
+    {
+        if (data.Length == 0)
+            return true;
+
+        if (data.Length >= 2 &&
+            ((data[0] == 0xFF && data[1] == 0xFE) ||
+             (data[0] == 0xFE && data[1] == 0xFF)))
+            return true;
+
+        int zero = data.Count(b => b == 0);
+        if (zero > data.Length / 20)
+            return false;
+
+        try
+        {
+            string text = DecodeText(data).Text;
+            if (text.Length == 0)
+                return true;
+
+            int badControls = text.Count(c =>
+                char.IsControl(c) && c != '\r' && c != '\n' && c != '\t' && c != '\f');
+
+            return badControls <= Math.Max(2, text.Length / 100);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool CanCompileJava(ViewRow row)
+    {
+        if (editMode)
+            return false;
+
+        if (row.Source != "서버팩")
+            return false;
+
+        if (!row.Extension.Equals(".java", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return File.Exists(row.SourceKey) &&
+               !string.IsNullOrWhiteSpace(serverRootPath) &&
+               Directory.Exists(Path.Combine(serverRootPath, "src"));
+    }
+
+    private bool CanCompileWholeServer()
+    {
+        if (editMode)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(serverRootPath))
+            return false;
+
+        return Directory.Exists(Path.Combine(serverRootPath, "src")) &&
+               Directory.Exists(Path.Combine(serverRootPath, "lib"));
+    }
+
+    private async Task CompileSelectedJavaAsync()
+    {
+        if (contextMenuRow == null || !CanCompileJava(contextMenuRow))
+            return;
+
+        string root = serverRootPath!;
+        string javaFile = contextMenuRow.SourceKey;
+        string binDir = Path.Combine(root, "bin");
+        string tempDir = Path.Combine(root, ".inspector_compile_one");
+
+        Directory.CreateDirectory(binDir);
+
+        try
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            Directory.CreateDirectory(tempDir);
+
+            ShowBuildOutput(
+                $"[단일 Java 컴파일]\r\n파일: {javaFile}\r\n\r\nJDK 확인 중...\r\n");
+
+            string? javac = FindJavaTool("javac.exe");
+            if (javac == null)
+                throw new InvalidOperationException(
+                    "javac.exe를 찾을 수 없습니다. JDK 8을 설치하고 JAVA_HOME 또는 PATH를 설정하세요.");
+
+            string classPath = BuildServerClassPath(root, includeBin: true);
+
+            var args = new List<string>
+            {
+                "-encoding", "EUC-KR",
+                "-source", "1.8",
+                "-target", "1.8",
+                "-implicit:none",
+                "-classpath", classPath,
+                "-sourcepath", Path.Combine(root, "src"),
+                "-d", tempDir,
+                javaFile
+            };
+
+            SetBusy(true, "Java 단일 파일 컴파일 중...");
+            var result = await RunProcessAsync(javac, args, root, AppendBuildOutput);
+
+            if (result.ExitCode != 0)
+            {
+                AppendBuildOutput($"\r\n[실패] javac 종료코드 {result.ExitCode}\r\n");
+                status.Text = "Java 컴파일 실패 - 원본/class 변경 없음";
+                return;
+            }
+
+            var classFiles = Directory.EnumerateFiles(tempDir, "*.class", SearchOption.AllDirectories).ToList();
+            if (classFiles.Count == 0)
+                throw new InvalidOperationException("컴파일은 성공했지만 생성된 .class 파일을 찾지 못했습니다.");
+
+            int copied = 0;
+            foreach (string compiled in classFiles)
+            {
+                string rel = Path.GetRelativePath(tempDir, compiled);
+                string target = Path.Combine(binDir, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+
+                if (File.Exists(target))
+                {
+                    string backup = target + ".bak";
+                    if (!File.Exists(backup))
+                        File.Copy(target, backup, overwrite: false);
+                }
+
+                File.Copy(compiled, target, overwrite: true);
+                copied++;
+                AppendBuildOutput($"적용: bin\\{rel}\r\n");
+            }
+
+            AppendBuildOutput($"\r\n[성공] {copied}개 class 적용 완료\r\n");
+            status.Text = $"Java 컴파일 성공: {Path.GetFileName(javaFile)} → {copied}개 class";
+        }
+        catch (Exception ex)
+        {
+            AppendBuildOutput($"\r\n[오류] {ex}\r\n");
+            MessageBox.Show(this, ex.Message, "Java 컴파일 오류",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            status.Text = "Java 컴파일 실패";
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, true);
+            }
+            catch { }
+
+            SetBusy(false);
+        }
+    }
+
+    private async Task CompileWholeServerAsync()
+    {
+        if (!CanCompileWholeServer())
+            return;
+
+        string root = serverRootPath!;
+        string srcDir = Path.Combine(root, "src");
+        string tempDir = Path.Combine(root, ".inspector_full_build");
+        string tempJar = Path.Combine(root, "l1jserver.jar.inspector_new");
+        string finalJar = Path.Combine(root, "l1jserver.jar");
+        string manifest = Path.Combine(srcDir, "META-INF", "MANIFEST.MF");
+
+        var answer = MessageBox.Show(this,
+            "서버 전체 Java 소스를 컴파일하고 l1jserver.jar를 새로 만듭니다.\n\n" +
+            "컴파일/새 JAR 생성이 모두 성공한 뒤에만 기존 JAR를 교체합니다.\n진행할까요?",
+            "서버 전체 컴파일",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (answer != DialogResult.Yes)
+            return;
+
+        try
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            Directory.CreateDirectory(tempDir);
+
+            if (File.Exists(tempJar))
+                File.Delete(tempJar);
+
+            string? javac = FindJavaTool("javac.exe");
+            string? jarTool = FindJavaTool("jar.exe");
+
+            if (javac == null || jarTool == null)
+                throw new InvalidOperationException(
+                    "JDK의 javac.exe / jar.exe를 찾을 수 없습니다. JDK 8을 설치하고 JAVA_HOME 또는 PATH를 설정하세요.");
+
+            var javaFiles = Directory.EnumerateFiles(srcDir, "*.java", SearchOption.AllDirectories)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (javaFiles.Count == 0)
+                throw new InvalidOperationException("src 폴더에서 Java 소스를 찾지 못했습니다.");
+
+            ShowBuildOutput(
+                $"[서버 전체 컴파일]\r\n서버팩: {root}\r\nJava 소스: {javaFiles.Count:N0}개\r\n\r\n");
+
+            string argFile = Path.Combine(tempDir, "sources.txt");
+            await File.WriteAllLinesAsync(
+                argFile,
+                javaFiles.Select(p => "\"" + p.Replace("\\", "\\\\") + "\""),
+                new UTF8Encoding(false));
+
+            string classPath = BuildServerClassPath(root, includeBin: false);
+
+            var javacArgs = new List<string>
+            {
+                "-encoding", "EUC-KR",
+                "-source", "1.8",
+                "-target", "1.8",
+                "-classpath", classPath,
+                "-d", tempDir,
+                "@" + argFile
+            };
+
+            SetBusy(true, "서버 전체 Java 컴파일 중...");
+            var compileResult = await RunProcessAsync(javac, javacArgs, root, AppendBuildOutput);
+
+            if (compileResult.ExitCode != 0)
+            {
+                AppendBuildOutput($"\r\n[컴파일 실패] 종료코드 {compileResult.ExitCode}\r\n기존 JAR는 변경하지 않았습니다.\r\n");
+                status.Text = "서버 전체 컴파일 실패 - 기존 JAR 유지";
+                return;
+            }
+
+            if (!File.Exists(manifest))
+                throw new FileNotFoundException("MANIFEST.MF를 찾을 수 없습니다.", manifest);
+
+            AppendBuildOutput("\r\nJava 컴파일 성공. JAR 생성 중...\r\n");
+
+            var jarArgs = new List<string>
+            {
+                "cfm",
+                tempJar,
+                manifest,
+                "-C",
+                tempDir,
+                "."
+            };
+
+            var jarResult = await RunProcessAsync(jarTool, jarArgs, root, AppendBuildOutput);
+
+            if (jarResult.ExitCode != 0 || !File.Exists(tempJar))
+            {
+                AppendBuildOutput($"\r\n[JAR 생성 실패] 종료코드 {jarResult.ExitCode}\r\n기존 JAR는 변경하지 않았습니다.\r\n");
+                status.Text = "JAR 생성 실패 - 기존 JAR 유지";
+                return;
+            }
+
+            string backup = finalJar + ".bak_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
+            if (File.Exists(finalJar))
+                File.Copy(finalJar, backup, overwrite: false);
+
+            File.Copy(tempJar, finalJar, overwrite: true);
+
+            AppendBuildOutput(
+                $"\r\n[성공] l1jserver.jar 생성 완료\r\n" +
+                $"JAR: {finalJar}\r\n" +
+                (File.Exists(backup) ? $"기존 JAR 백업: {backup}\r\n" : ""));
+
+            status.Text = $"서버 전체 컴파일 성공: Java {javaFiles.Count:N0}개 → l1jserver.jar";
+        }
+        catch (Exception ex)
+        {
+            AppendBuildOutput($"\r\n[오류] {ex}\r\n");
+            MessageBox.Show(this, ex.Message, "서버 전체 컴파일 오류",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            status.Text = "서버 전체 컴파일 실패";
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempJar))
+                    File.Delete(tempJar);
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, true);
+            }
+            catch { }
+
+            SetBusy(false);
+        }
+    }
+
+    private static string BuildServerClassPath(string root, bool includeBin)
+    {
+        var parts = new List<string>();
+
+        if (includeBin)
+        {
+            string bin = Path.Combine(root, "bin");
+            if (Directory.Exists(bin))
+                parts.Add(bin);
+        }
+
+        string lib = Path.Combine(root, "lib");
+        if (Directory.Exists(lib))
+        {
+            foreach (string jar in Directory.EnumerateFiles(lib, "*.jar", SearchOption.TopDirectoryOnly)
+                         .Where(p => !Path.GetFileName(p).StartsWith("old_", StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+            {
+                parts.Add(jar);
+            }
+        }
+
+        string serverJar = Path.Combine(root, "l1jserver.jar");
+        if (includeBin && File.Exists(serverJar))
+            parts.Add(serverJar);
+
+        return string.Join(Path.PathSeparator, parts);
+    }
+
+    private static string? FindJavaTool(string toolName)
+    {
+        string? javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
+
+        if (!string.IsNullOrWhiteSpace(javaHome))
+        {
+            string candidate = Path.Combine(javaHome, "bin", toolName);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            foreach (string dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    string candidate = Path.Combine(dir.Trim().Trim('"'), toolName);
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
+                catch { }
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<ProcessResult> RunProcessAsync(
+        string fileName,
+        IEnumerable<string> arguments,
+        string workingDirectory,
+        Action<string> onOutput)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = fileName,
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        foreach (string arg in arguments)
+            psi.ArgumentList.Add(arg);
+
+        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                BeginInvoke(() => onOutput(e.Data + Environment.NewLine));
+        };
+
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                BeginInvoke(() => onOutput(e.Data + Environment.NewLine));
+        };
+
+        if (!process.Start())
+            throw new InvalidOperationException("프로세스를 시작할 수 없습니다: " + fileName);
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        await process.WaitForExitAsync();
+
+        return new ProcessResult(process.ExitCode);
+    }
+
+    private void ShowBuildOutput(string initial)
+    {
+        if (editMode)
+            CancelOriginalEdit();
+
+        ClearPreview();
+        textPreview.ReadOnly = true;
+        textPreview.Text = initial;
+        textPreview.Visible = true;
+        textPreview.BringToFront();
+        lblInfo.Text = "컴파일 로그";
+        Application.DoEvents();
+    }
+
+    private void AppendBuildOutput(string text)
+    {
+        if (textPreview.InvokeRequired)
+        {
+            textPreview.BeginInvoke(() => AppendBuildOutput(text));
+            return;
+        }
+
+        textPreview.AppendText(text);
+        textPreview.SelectionStart = textPreview.TextLength;
+        textPreview.ScrollToCaret();
+        Application.DoEvents();
     }
 
     private string? GetOriginalFilePath(ViewRow row)
@@ -698,6 +1165,7 @@ internal sealed class ClientInspectorForm : Form
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         string serverRoot = dlg.SelectedPath;
+        serverRootPath = serverRoot;
 
         SetBusy(true, "서버팩 폴더 분석 중...");
         try
@@ -2047,6 +2515,7 @@ internal sealed class ClientInspectorForm : Form
 
     private sealed record DecodedText(string Text, string EncodingName);
     private sealed record EditableEncodingInfo(Encoding Encoding, bool EmitBom, int PreambleLength, string Name);
+    private sealed record ProcessResult(int ExitCode);
 
     private sealed class ScanResult
     {
