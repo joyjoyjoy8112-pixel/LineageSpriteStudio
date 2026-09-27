@@ -24,6 +24,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly DataGridView gridPacks = NewGrid();
     private readonly DataGridView gridFiles = NewGrid();
     private readonly DataGridView gridTexts = NewGrid();
+    private readonly DataGridView gridAllView = NewGrid();
 
     private readonly PictureBox preview = new()
     {
@@ -53,17 +54,48 @@ internal sealed class ClientInspectorForm : Form
     private readonly Button btnSaveTextRaw = new() { Text = "선택 원본 저장", AutoSize = true };
     private readonly Label lblTextInfo = new() { AutoSize = true, Padding = new Padding(6) };
 
+    private readonly TextBox txtAllFilter = new() { Width = 240, PlaceholderText = "모든 파일 검색 (예: .png / 61- / autohunt)" };
+    private readonly Button btnAllFilter = new() { Text = "검색", AutoSize = true };
+    private readonly Button btnAllReset = new() { Text = "전체", AutoSize = true };
+    private readonly Button btnAllSave = new() { Text = "선택 원본 저장", AutoSize = true };
+    private readonly Label lblAllInfo = new() { AutoSize = true, Padding = new Padding(6) };
+    private readonly TabControl universalPreviewTabs = new() { Dock = DockStyle.Fill };
+    private readonly RichTextBox universalText = new()
+    {
+        Dock = DockStyle.Fill, ReadOnly = true, DetectUrls = false, WordWrap = false,
+        Font = new Font("Consolas", 9F), BackColor = Color.White
+    };
+    private readonly RichTextBox universalHex = new()
+    {
+        Dock = DockStyle.Fill, ReadOnly = true, DetectUrls = false, WordWrap = false,
+        Font = new Font("Consolas", 9F), BackColor = Color.White
+    };
+    private readonly PictureBox universalImage = new()
+    {
+        Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(26, 29, 36)
+    };
+    private readonly PictureBox universalSpr = new()
+    {
+        Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(26, 29, 36)
+    };
+    private readonly NumericUpDown universalSprFrame = new() { Minimum = 0, Maximum = 0, Width = 90 };
+    private readonly Label universalSprInfo = new() { AutoSize = true, Padding = new Padding(6) };
+
     private readonly BindingList<PackRow> packRows = new();
     private readonly BindingList<FileRow> fileRows = new();
     private readonly List<EntryRow> allEntries = new();
     private List<EntryRow> currentEntries = new();
     private readonly List<TextRow> allTextRows = new();
     private List<TextRow> currentTextRows = new();
+    private readonly List<UniversalRow> allViewRows = new();
+    private List<UniversalRow> currentViewRows = new();
     private readonly Dictionary<string, AnyPakScanner> scanners = new(StringComparer.OrdinalIgnoreCase);
 
     private string? rootPath;
     private byte[]? currentTextRaw;
     private string currentTextSuggestedName = "text.bin";
+    private byte[]? currentUniversalRaw;
+    private string currentUniversalSuggestedName = "selected.bin";
 
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -157,6 +189,53 @@ internal sealed class ClientInspectorForm : Form
         textSplit.Panel2.Controls.Add(textRight);
         tabTexts.Controls.Add(textSplit);
 
+        var tabAllView = new TabPage("모든 파일 보기");
+        var allSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 720 };
+
+        var allLeft = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        allLeft.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        allLeft.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var allBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(4) };
+        allBar.Controls.Add(txtAllFilter);
+        allBar.Controls.Add(btnAllFilter);
+        allBar.Controls.Add(btnAllReset);
+        allBar.Controls.Add(btnAllSave);
+        allLeft.Controls.Add(allBar, 0, 0);
+        allLeft.Controls.Add(gridAllView, 0, 1);
+        allSplit.Panel1.Controls.Add(allLeft);
+
+        var allRight = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        allRight.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        allRight.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        allRight.Controls.Add(lblAllInfo, 0, 0);
+
+        var tabUText = new TabPage("텍스트/HTML");
+        tabUText.Controls.Add(universalText);
+        var tabUImage = new TabPage("이미지");
+        tabUImage.Controls.Add(universalImage);
+        var tabUSpr = new TabPage("SPR");
+        var sprPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3 };
+        sprPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sprPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        sprPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var sprTop = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(4) };
+        sprTop.Controls.Add(new Label { Text = "프레임:", AutoSize = true, Padding = new Padding(0, 6, 0, 0) });
+        sprTop.Controls.Add(universalSprFrame);
+        sprPanel.Controls.Add(sprTop, 0, 0);
+        sprPanel.Controls.Add(universalSpr, 0, 1);
+        sprPanel.Controls.Add(universalSprInfo, 0, 2);
+        tabUSpr.Controls.Add(sprPanel);
+        var tabUHex = new TabPage("HEX/ASCII");
+        tabUHex.Controls.Add(universalHex);
+
+        universalPreviewTabs.TabPages.Add(tabUText);
+        universalPreviewTabs.TabPages.Add(tabUImage);
+        universalPreviewTabs.TabPages.Add(tabUSpr);
+        universalPreviewTabs.TabPages.Add(tabUHex);
+        allRight.Controls.Add(universalPreviewTabs, 0, 1);
+        allSplit.Panel2.Controls.Add(allRight);
+        tabAllView.Controls.Add(allSplit);
+
         var tabPacks = new TabPage("IDX/PAK 묶음");
         tabPacks.Controls.Add(gridPacks);
 
@@ -174,6 +253,7 @@ internal sealed class ClientInspectorForm : Form
         tabFiles.Controls.Add(filePanel);
 
         tabs.TabPages.Add(tabEntries);
+        tabs.TabPages.Add(tabAllView);
         tabs.TabPages.Add(tabTexts);
         tabs.TabPages.Add(tabPacks);
         tabs.TabPages.Add(tabFiles);
@@ -224,10 +304,22 @@ internal sealed class ClientInspectorForm : Form
         };
         btnSaveTextRaw.Click += async (_, _) => await SaveCurrentTextRawAsync();
 
+        btnAllFilter.Click += (_, _) => ApplyUniversalFilter();
+        txtAllFilter.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ApplyUniversalFilter(); }
+        };
+        btnAllReset.Click += (_, _) => { txtAllFilter.Clear(); ApplyUniversalFilter(); };
+        btnAllSave.Click += async (_, _) => await SaveCurrentUniversalRawAsync();
+        gridAllView.SelectionChanged += async (_, _) => await PreviewUniversalSelectedAsync();
+        universalSprFrame.ValueChanged += async (_, _) => await RenderUniversalSprFrameAsync();
+
         FormClosed += (_, _) =>
         {
             foreach (var s in scanners.Values) s.Dispose();
             preview.Image?.Dispose();
+            universalImage.Image?.Dispose();
+            universalSpr.Image?.Dispose();
         };
 
         ConfigureColumnsAfterBinding();
@@ -260,6 +352,11 @@ internal sealed class ClientInspectorForm : Form
         {
             HideColumn(gridTexts, nameof(TextRow.SourceKey));
             FillColumn(gridTexts, nameof(TextRow.Path));
+        };
+        gridAllView.DataBindingComplete += (_, _) =>
+        {
+            HideColumn(gridAllView, nameof(UniversalRow.SourceKey));
+            FillColumn(gridAllView, nameof(UniversalRow.Path));
         };
     }
 
@@ -307,8 +404,17 @@ internal sealed class ClientInspectorForm : Form
             fileRows.Clear();
             allTextRows.Clear();
             currentTextRows.Clear();
+            allViewRows.Clear();
+            currentViewRows.Clear();
             txtTextPreview.Clear();
             currentTextRaw = null;
+            currentUniversalRaw = null;
+            universalText.Clear();
+            universalHex.Clear();
+            universalImage.Image?.Dispose();
+            universalImage.Image = null;
+            universalSpr.Image?.Dispose();
+            universalSpr.Image = null;
             preview.Image?.Dispose();
             preview.Image = null;
 
@@ -320,9 +426,11 @@ internal sealed class ClientInspectorForm : Form
             foreach (var kv in result.Scanners) scanners[kv.Key] = kv.Value;
 
             BuildTextIndex();
+            BuildUniversalIndex();
             ApplyTextFilter(false);
+            ApplyUniversalFilter();
             await ApplyFilterAsync(false);
-            status.Text = $"완료: IDX/PAK {packRows.Count:N0}개, 내부 항목 {allEntries.Count:N0}개, 실제 파일 {fileRows.Count:N0}개, HTML/텍스트 {allTextRows.Count:N0}개";
+            status.Text = $"완료: IDX/PAK {packRows.Count:N0}개, 내부 항목 {allEntries.Count:N0}개, 실제 파일 {fileRows.Count:N0}개, 전체보기 {allViewRows.Count:N0}개";
         }
         catch (Exception ex)
         {
@@ -433,6 +541,217 @@ internal sealed class ClientInspectorForm : Form
         }
 
         return result;
+    }
+
+
+    private void BuildUniversalIndex()
+    {
+        allViewRows.Clear();
+
+        foreach (var f in fileRows)
+        {
+            allViewRows.Add(new UniversalRow
+            {
+                Source = "실제파일",
+                Path = f.RelativePath,
+                Container = "",
+                Extension = f.Extension,
+                SizeBytes = f.SizeBytes,
+                SourceKey = f.RelativePath
+            });
+        }
+
+        foreach (var e in allEntries)
+        {
+            allViewRows.Add(new UniversalRow
+            {
+                Source = "PAK 내부",
+                Path = e.FileName,
+                Container = e.IdxFile + " → " + e.PakFile,
+                Extension = Path.GetExtension(e.FileName),
+                SizeBytes = e.FileSize,
+                SourceKey = e.IdxFile
+            });
+        }
+
+        allViewRows.Sort((a, b) =>
+        {
+            int c = string.Compare(a.Extension, b.Extension, StringComparison.OrdinalIgnoreCase);
+            if (c != 0) return c;
+            return string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private void ApplyUniversalFilter()
+    {
+        string q = txtAllFilter.Text.Trim();
+        currentViewRows = allViewRows
+            .Where(x => q.Length == 0 ||
+                        x.Path.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                        x.Container.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                        x.Extension.Contains(q, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        gridAllView.DataSource = null;
+        gridAllView.DataSource = new BindingList<UniversalRow>(currentViewRows);
+        status.Text = $"모든 파일 보기: {currentViewRows.Count:N0} / {allViewRows.Count:N0}";
+    }
+
+    private async Task<byte[]> ReadUniversalBytesAsync(UniversalRow row)
+    {
+        if (row.Source == "실제파일")
+        {
+            string full = Path.Combine(rootPath!, row.SourceKey);
+            return await File.ReadAllBytesAsync(full);
+        }
+
+        string idxFull = Path.Combine(rootPath!, row.SourceKey);
+        if (!scanners.TryGetValue(idxFull, out var scanner))
+            throw new InvalidOperationException("해당 IDX 스캐너를 찾을 수 없습니다.");
+
+        var rec = scanner.Entries.FirstOrDefault(e => e.FileName.Equals(row.Path, StringComparison.OrdinalIgnoreCase));
+        if (rec == null) throw new FileNotFoundException("PAK 내부 항목을 찾을 수 없습니다.", row.Path);
+        return await Task.Run(() => scanner.Extract(rec));
+    }
+
+    private async Task PreviewUniversalSelectedAsync()
+    {
+        if (gridAllView.SelectedRows.Count != 1) return;
+        if (gridAllView.SelectedRows[0].DataBoundItem is not UniversalRow row) return;
+
+        try
+        {
+            status.Text = "선택 파일 읽는 중...";
+            byte[] data = await ReadUniversalBytesAsync(row);
+            currentUniversalRaw = data;
+            currentUniversalSuggestedName = Path.GetFileName(row.Path);
+            string ext = row.Extension.ToLowerInvariant();
+
+            lblAllInfo.Text = $"{row.Source} | {row.Path} | {data.Length:N0} bytes" +
+                              (string.IsNullOrWhiteSpace(row.Container) ? "" : $" | {row.Container}");
+
+            if (TextExtensions.Contains(ext))
+            {
+                var decoded = DecodeText(data);
+                universalText.Text = decoded.Text;
+                universalPreviewTabs.SelectedIndex = 0;
+                lblAllInfo.Text += $" | {decoded.EncodingName}";
+            }
+            else if (IsStandardImage(ext))
+            {
+                using var ms = new MemoryStream(data);
+                using var img = Image.FromStream(ms);
+                var clone = new Bitmap(img);
+                var old = universalImage.Image;
+                universalImage.Image = clone;
+                old?.Dispose();
+                universalPreviewTabs.SelectedIndex = 1;
+                lblAllInfo.Text += $" | {clone.Width}x{clone.Height}";
+            }
+            else if (ext.Equals(".spr", StringComparison.OrdinalIgnoreCase))
+            {
+                byte[] spr = SpriteCodec.DecodeIfNeeded(data);
+                var info = SprInfo.Analyze(spr);
+                universalSprFrame.Maximum = Math.Max(0, info.FrameCount - 1);
+                if (universalSprFrame.Value > universalSprFrame.Maximum)
+                    universalSprFrame.Value = universalSprFrame.Maximum;
+
+                universalSprInfo.Text = $"Frame {info.FrameCount} | " +
+                    $"{(info.IsPalette ? "Palette " + info.PaletteSize : "RGB555")} | Type {info.FrameType} | " +
+                    $"{(SpriteCodec.IsZlib(data) ? "ZLIB" : "RAW")}";
+                await RenderUniversalSprFrameAsync();
+                universalPreviewTabs.SelectedIndex = 2;
+            }
+            else
+            {
+                universalHex.Text = MakeHexDump(data, 1024 * 1024);
+                universalPreviewTabs.SelectedIndex = 3;
+                lblAllInfo.Text += data.Length > 1024 * 1024 ? " | HEX 앞 1MB 표시" : " | HEX 전체 표시";
+            }
+
+            status.Text = $"보기 완료: {row.Path}";
+        }
+        catch (Exception ex)
+        {
+            universalHex.Text = "미리보기 실패\r\n\r\n" + ex;
+            universalPreviewTabs.SelectedIndex = 3;
+            status.Text = "미리보기 실패";
+        }
+    }
+
+    private async Task RenderUniversalSprFrameAsync()
+    {
+        if (gridAllView.SelectedRows.Count != 1) return;
+        if (gridAllView.SelectedRows[0].DataBoundItem is not UniversalRow row) return;
+        if (!row.Extension.Equals(".spr", StringComparison.OrdinalIgnoreCase)) return;
+
+        try
+        {
+            byte[] data = currentUniversalRaw ?? await ReadUniversalBytesAsync(row);
+            byte[] spr = SpriteCodec.DecodeIfNeeded(data);
+            int frame = (int)universalSprFrame.Value;
+            var bmp = await Task.Run(() => SprDecoder.DecodeFrame(spr, frame));
+            var old = universalSpr.Image;
+            universalSpr.Image = bmp;
+            old?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            universalSprInfo.Text = "SPR 표시 실패: " + ex.Message;
+        }
+    }
+
+    private static bool IsStandardImage(string ext) =>
+        ext.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".gif", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".ico", StringComparison.OrdinalIgnoreCase);
+
+    private static string MakeHexDump(byte[] data, int maxBytes)
+    {
+        int length = Math.Min(data.Length, maxBytes);
+        var sb = new StringBuilder(length * 4);
+        for (int offset = 0; offset < length; offset += 16)
+        {
+            int count = Math.Min(16, length - offset);
+            sb.Append(offset.ToString("X8")).Append("  ");
+
+            for (int i = 0; i < 16; i++)
+            {
+                if (i < count) sb.Append(data[offset + i].ToString("X2")).Append(' ');
+                else sb.Append("   ");
+                if (i == 7) sb.Append(' ');
+            }
+
+            sb.Append(" |");
+            for (int i = 0; i < count; i++)
+            {
+                byte b = data[offset + i];
+                sb.Append(b >= 32 && b <= 126 ? (char)b : '.');
+            }
+            sb.AppendLine("|");
+        }
+        return sb.ToString();
+    }
+
+    private async Task SaveCurrentUniversalRawAsync()
+    {
+        if (currentUniversalRaw == null)
+        {
+            MessageBox.Show(this, "먼저 '모든 파일 보기'에서 항목을 선택하세요.");
+            return;
+        }
+
+        using var dlg = new SaveFileDialog
+        {
+            FileName = string.IsNullOrWhiteSpace(currentUniversalSuggestedName) ? "selected.bin" : currentUniversalSuggestedName,
+            Filter = "모든 파일 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        await File.WriteAllBytesAsync(dlg.FileName, currentUniversalRaw);
+        status.Text = "선택 원본 저장 완료";
     }
 
     private void BuildTextIndex()
@@ -959,6 +1278,16 @@ internal sealed class ClientInspectorForm : Form
     }
 
     internal sealed class TextRow
+    {
+        [DisplayName("위치")] public string Source { get; set; } = "";
+        [DisplayName("파일/내부경로")] public string Path { get; set; } = "";
+        [DisplayName("IDX/PAK")] public string Container { get; set; } = "";
+        [DisplayName("확장자")] public string Extension { get; set; } = "";
+        [DisplayName("크기")] public long SizeBytes { get; set; }
+        [Browsable(false)] public string SourceKey { get; set; } = "";
+    }
+
+    internal sealed class UniversalRow
     {
         [DisplayName("위치")] public string Source { get; set; } = "";
         [DisplayName("파일/내부경로")] public string Path { get; set; } = "";
