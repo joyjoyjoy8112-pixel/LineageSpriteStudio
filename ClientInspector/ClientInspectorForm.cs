@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
+using System.IO.Compression;
 
 namespace LineageSpriteStudio;
 
@@ -9,6 +10,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly TextBox txtRoot = new() { ReadOnly = true, Dock = DockStyle.Fill };
     private readonly Button btnBrowse = new() { Text = "클라 폴더 선택", AutoSize = true };
     private readonly Button btnScan = new() { Text = "전체 검사", AutoSize = true };
+    private readonly Button btnDbBackup = new() { Text = "나비캣 PSC 선택", AutoSize = true };
     private readonly TextBox txtSearch = new() { Width = 260, PlaceholderText = "파일명 검색 (예: 61- / .png / autohunt)" };
     private readonly ComboBox cboType = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
     private readonly Button btnSave = new() { Text = "선택 원본 저장", AutoSize = true };
@@ -87,6 +89,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly List<ViewRow> allRows = new();
     private List<ViewRow> currentRows = new();
     private readonly Dictionary<string, AnyPakScanner> scanners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ViewRow> externalBackupRows = new();
 
     private string? rootPath;
     private byte[]? currentRaw;
@@ -108,33 +111,34 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V1.4 - 통합 확인";
+        Text = "Lineage Client Inspector V1.5 - 클라 + Navicat PSC 통합 확인";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1180, 720);
         Font = new Font("Malgun Gothic", 9F);
 
-        cboType.Items.AddRange(new object[] { "전체", "이미지", "HTML/텍스트", "SPR", "기타" });
+        cboType.Items.AddRange(new object[] { "전체", "이미지", "HTML/텍스트", "SPR", "DB백업", "기타" });
         cboType.SelectedIndex = 0;
 
         var top = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             Height = 44,
-            ColumnCount = 8,
+            ColumnCount = 9,
             Padding = new Padding(6)
         };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 1; i < 8; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 1; i < 9; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.Controls.Add(txtRoot, 0, 0);
         top.Controls.Add(btnBrowse, 1, 0);
         top.Controls.Add(btnScan, 2, 0);
-        top.Controls.Add(cboType, 3, 0);
-        top.Controls.Add(txtSearch, 4, 0);
-        top.Controls.Add(btnHash, 5, 0);
-        top.Controls.Add(btnSave, 6, 0);
-        top.Controls.Add(lblCount, 7, 0);
+        top.Controls.Add(btnDbBackup, 3, 0);
+        top.Controls.Add(cboType, 4, 0);
+        top.Controls.Add(txtSearch, 5, 0);
+        top.Controls.Add(btnHash, 6, 0);
+        top.Controls.Add(btnSave, 7, 0);
+        top.Controls.Add(lblCount, 8, 0);
 
         var split = new SplitContainer
         {
@@ -171,6 +175,7 @@ internal sealed class ClientInspectorForm : Form
 
         btnBrowse.Click += (_, _) => ChooseFolder();
         btnScan.Click += async (_, _) => await ScanAsync();
+        btnDbBackup.Click += async (_, _) => await ChooseDbBackupsAsync();
         txtSearch.TextChanged += (_, _) => ApplyFilter();
         cboType.SelectedIndexChanged += (_, _) => ApplyFilter();
         grid.SelectionChanged += async (_, _) => await PreviewSelectedAsync();
@@ -236,6 +241,7 @@ internal sealed class ClientInspectorForm : Form
                 scanners[kv.Key] = kv.Value;
 
             allRows.AddRange(result.Rows);
+            allRows.AddRange(externalBackupRows);
             ApplyFilter();
 
             status.Text = $"완료: 전체 {allRows.Count:N0}개";
@@ -307,6 +313,131 @@ internal sealed class ClientInspectorForm : Form
         return result;
     }
 
+    private async Task ChooseDbBackupsAsync()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "Navicat/DB 백업 파일 선택",
+            Filter = "Navicat PSC (*.psc)|*.psc|Navicat/DB 백업 (*.psc;*.nb3;*.sql;*.db;*.sqlite;*.bak;*.dump)|*.psc;*.nb3;*.sql;*.db;*.sqlite;*.bak;*.dump|모든 파일 (*.*)|*.*",
+            Multiselect = true
+        };
+
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        SetBusy(true, "DB 백업 분석 중...");
+        try
+        {
+            externalBackupRows.Clear();
+
+            foreach (string path in dlg.FileNames)
+            {
+                var fi = new FileInfo(path);
+                string ext = fi.Extension;
+
+                var parent = new ViewRow
+                {
+                    Source = "DB백업",
+                    Type = ext.Equals(".sql", StringComparison.OrdinalIgnoreCase) ? "HTML/텍스트" : "DB백업",
+                    Path = fi.Name,
+                    Container = fi.DirectoryName ?? "",
+                    Extension = ext,
+                    SizeBytes = fi.Length,
+                    SourceKey = path
+                };
+
+                if (fi.Length <= 10 * 1024 * 1024 && ext.Equals(".sql", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        byte[] bytes = await File.ReadAllBytesAsync(path);
+                        parent.SearchText = DecodeText(bytes).Text;
+                    }
+                    catch { }
+                }
+
+                externalBackupRows.Add(parent);
+
+                if (ext.Equals(".psc", StringComparison.OrdinalIgnoreCase) ||
+                    ext.Equals(".nb3", StringComparison.OrdinalIgnoreCase))
+                {
+                    await AddArchiveEntriesAsync(path);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(rootPath) && Directory.Exists(rootPath))
+            {
+                foreach (var row in allRows.Where(x => x.Source == "DB백업" || x.Source == "PSC 내부").ToList())
+                    allRows.Remove(row);
+                allRows.AddRange(externalBackupRows);
+            }
+            else
+            {
+                allRows.Clear();
+                allRows.AddRange(externalBackupRows);
+            }
+
+            ApplyFilter();
+            status.Text = $"DB 백업 추가 완료: {dlg.FileNames.Length}개, 표시 항목 {externalBackupRows.Count:N0}개";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.ToString(), "DB 백업 분석 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async Task AddArchiveEntriesAsync(string backupPath)
+    {
+        try
+        {
+            using var fs = new FileStream(backupPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var za = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: false);
+
+            foreach (var entry in za.Entries)
+            {
+                if (string.IsNullOrEmpty(entry.Name)) continue;
+
+                var row = new ViewRow
+                {
+                    Source = "PSC 내부",
+                    Type = DetectType(entry.FullName),
+                    Path = entry.FullName,
+                    Container = Path.GetFileName(backupPath),
+                    Extension = Path.GetExtension(entry.FullName),
+                    SizeBytes = entry.Length,
+                    SourceKey = "PSCZIP|" + backupPath + "|" + entry.FullName
+                };
+
+                if (entry.Length <= 4 * 1024 * 1024)
+                {
+                    try
+                    {
+                        using var es = entry.Open();
+                        using var ms = new MemoryStream();
+                        await es.CopyToAsync(ms);
+                        byte[] bytes = ms.ToArray();
+
+                        if (TextExtensions.Contains(row.Extension))
+                            row.SearchText = DecodeText(bytes).Text;
+                        else
+                            row.SearchText = ExtractPrintableStrings(bytes, 250_000);
+                    }
+                    catch { }
+                }
+
+                externalBackupRows.Add(row);
+            }
+        }
+        catch
+        {
+            // Navicat 버전/백업 방식에 따라 일반 ZIP으로 직접 열리지 않을 수 있음.
+            // 이 경우 상위 PSC 파일 자체는 계속 HEX/문자열로 확인 가능.
+        }
+    }
+
     private void ApplyFilter()
     {
         string q = txtSearch.Text.Trim();
@@ -317,7 +448,8 @@ internal sealed class ClientInspectorForm : Form
             .Where(r => q.Length == 0 ||
                         r.Path.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                         r.Container.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                        r.Extension.Contains(q, StringComparison.OrdinalIgnoreCase))
+                        r.Extension.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                        r.SearchText.Contains(q, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         grid.DataSource = null;
@@ -374,6 +506,17 @@ internal sealed class ClientInspectorForm : Form
                 sprPreview.BringToFront();
                 await RenderSprFrameAsync();
             }
+            else if (type == "DB백업")
+            {
+                string strings = ExtractPrintableStrings(currentRaw, 400_000);
+                hexPreview.Text =
+                    "[PSC/DB 백업 - 읽을 수 있는 문자열]\r\n" +
+                    strings +
+                    "\r\n\r\n[HEX 앞부분]\r\n" +
+                    MakeHexDump(currentRaw, 256 * 1024);
+                hexPreview.Visible = true;
+                hexPreview.BringToFront();
+            }
             else
             {
                 hexPreview.Text = MakeHexDump(currentRaw, 1024 * 1024);
@@ -402,6 +545,27 @@ internal sealed class ClientInspectorForm : Form
         {
             string full = Path.Combine(rootPath!, row.SourceKey);
             return await File.ReadAllBytesAsync(full);
+        }
+
+        if (row.Source == "DB백업")
+            return await File.ReadAllBytesAsync(row.SourceKey);
+
+        if (row.Source == "PSC 내부" && row.SourceKey.StartsWith("PSCZIP|", StringComparison.Ordinal))
+        {
+            string payload = row.SourceKey["PSCZIP|".Length..];
+            int split = payload.LastIndexOf('|');
+            if (split <= 0) throw new InvalidDataException("PSC 내부 경로가 잘못되었습니다.");
+
+            string backupPath = payload[..split];
+            string entryName = payload[(split + 1)..];
+
+            using var fs = new FileStream(backupPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var za = new ZipArchive(fs, ZipArchiveMode.Read);
+            var entry = za.GetEntry(entryName) ?? throw new FileNotFoundException("PSC 내부 항목을 찾을 수 없습니다.", entryName);
+            using var es = entry.Open();
+            using var ms = new MemoryStream();
+            await es.CopyToAsync(ms);
+            return ms.ToArray();
         }
 
         string idxFull = row.SourceKey;
@@ -506,6 +670,13 @@ internal sealed class ClientInspectorForm : Form
         if (TextExtensions.Contains(ext)) return "HTML/텍스트";
         if (ImageExtensions.Contains(ext)) return "이미지";
         if (ext.Equals(".spr", StringComparison.OrdinalIgnoreCase)) return "SPR";
+        if (ext.Equals(".psc", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".nb3", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".db", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".sqlite", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".bak", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".dump", StringComparison.OrdinalIgnoreCase))
+            return "DB백업";
         return "기타";
     }
 
@@ -521,6 +692,14 @@ internal sealed class ClientInspectorForm : Form
 
         if (ImageExtensions.Contains(ext) || DetectImageFormat(data) != "미확인")
             return "이미지";
+
+        if (ext.Equals(".psc", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".nb3", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".db", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".sqlite", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".bak", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".dump", StringComparison.OrdinalIgnoreCase))
+            return "DB백업";
 
         return "기타";
     }
@@ -570,6 +749,35 @@ internal sealed class ClientInspectorForm : Form
         }
     }
 
+    private static string ExtractPrintableStrings(byte[] data, int maxChars)
+    {
+        var sb = new StringBuilder(Math.Min(maxChars, 100_000));
+        var current = new StringBuilder();
+
+        void Flush()
+        {
+            if (current.Length >= 4)
+            {
+                if (sb.Length + current.Length + 2 <= maxChars)
+                    sb.AppendLine(current.ToString());
+            }
+            current.Clear();
+        }
+
+        foreach (byte b in data)
+        {
+            if (sb.Length >= maxChars) break;
+
+            if ((b >= 32 && b <= 126) || b >= 0xA1)
+                current.Append((char)b);
+            else
+                Flush();
+        }
+
+        Flush();
+        return sb.ToString();
+    }
+
     private static string MakeHexDump(byte[] data, int maxBytes)
     {
         int length = Math.Min(data.Length, maxBytes);
@@ -607,6 +815,7 @@ internal sealed class ClientInspectorForm : Form
         UseWaitCursor = busy;
         btnBrowse.Enabled = !busy;
         btnScan.Enabled = !busy;
+        btnDbBackup.Enabled = !busy;
         btnSave.Enabled = !busy;
         btnHash.Enabled = !busy;
 
@@ -633,5 +842,6 @@ internal sealed class ClientInspectorForm : Form
         [DisplayName("확장자")] public string Extension { get; set; } = "";
         [DisplayName("크기")] public long SizeBytes { get; set; }
         [Browsable(false)] public string SourceKey { get; set; } = "";
+        [Browsable(false)] public string SearchText { get; set; } = "";
     }
 }
