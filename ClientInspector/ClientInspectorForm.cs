@@ -19,6 +19,14 @@ internal sealed class ClientInspectorForm : Form
     private readonly Button btnHash = new() { Text = "SHA-256", AutoSize = true };
     private readonly Label lblCount = new() { AutoSize = true, Padding = new Padding(8, 7, 0, 0) };
 
+    private readonly ContextMenuStrip filePathMenu = new();
+    private ViewRow? contextMenuRow;
+    private string? editFilePath;
+    private Encoding? editEncoding;
+    private bool editEmitBom;
+    private string editOriginalText = "";
+    private bool editMode;
+
     private readonly DataGridView grid = new()
     {
         Dock = DockStyle.Fill,
@@ -116,7 +124,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.1 - 클라 + DB + 서버팩 폴더 통합 검색";
+        Text = "Lineage Client Inspector V2.2 - 원본 파일 편집";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -180,6 +188,23 @@ internal sealed class ClientInspectorForm : Form
         Controls.Add(top);
         Controls.Add(statusStrip);
 
+        var copyNameItem = new ToolStripMenuItem("이름 복사");
+        copyNameItem.Click += (_, _) => CopyContextFileName();
+
+        var editOriginalItem = new ToolStripMenuItem("원본 파일 수정");
+        editOriginalItem.Click += async (_, _) => await BeginEditOriginalAsync();
+
+        filePathMenu.Items.Add(copyNameItem);
+        filePathMenu.Items.Add(new ToolStripSeparator());
+        filePathMenu.Items.Add(editOriginalItem);
+        filePathMenu.Opening += (_, _) =>
+        {
+            editOriginalItem.Enabled = contextMenuRow != null && CanEditOriginal(contextMenuRow);
+        };
+
+        grid.CellMouseDown += Grid_CellMouseDown;
+        textPreview.KeyDown += TextPreview_KeyDown;
+
         btnBrowse.Click += (_, _) => ChooseFolder();
         btnScan.Click += async (_, _) => await ScanAsync();
         btnDbBackup.Click += async (_, _) => await ChooseDbBackupsAsync();
@@ -217,6 +242,253 @@ internal sealed class ClientInspectorForm : Form
             imagePreview.Image?.Dispose();
             sprPreview.Image?.Dispose();
         };
+    }
+
+    private void Grid_CellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right || e.RowIndex < 0 || e.ColumnIndex < 0)
+            return;
+
+        var column = grid.Columns[e.ColumnIndex];
+        if (column == null || !string.Equals(column.DataPropertyName, nameof(ViewRow.Path), StringComparison.Ordinal))
+            return;
+
+        grid.ClearSelection();
+        grid.Rows[e.RowIndex].Selected = true;
+        grid.CurrentCell = grid.Rows[e.RowIndex].Cells[e.ColumnIndex];
+        contextMenuRow = grid.Rows[e.RowIndex].DataBoundItem as ViewRow;
+
+        if (contextMenuRow != null)
+            filePathMenu.Show(Cursor.Position);
+    }
+
+    private void CopyContextFileName()
+    {
+        if (contextMenuRow == null || string.IsNullOrWhiteSpace(contextMenuRow.Path))
+            return;
+
+        string value = contextMenuRow.Path.TrimEnd('\\', '/');
+        string name = Path.GetFileName(value);
+
+        if (string.IsNullOrWhiteSpace(name))
+            name = value;
+
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+
+        Clipboard.SetText(name);
+        status.Text = $"이름 복사 완료: {name}";
+    }
+
+    private bool CanEditOriginal(ViewRow row)
+    {
+        if (!TextExtensions.Contains(row.Extension))
+            return false;
+
+        string? path = GetOriginalFilePath(row);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return false;
+
+        try
+        {
+            return new FileInfo(path).Length <= 20L * 1024 * 1024;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private string? GetOriginalFilePath(ViewRow row)
+    {
+        if (row.Source == "실제파일")
+        {
+            if (string.IsNullOrWhiteSpace(rootPath))
+                return null;
+
+            return Path.Combine(rootPath, row.SourceKey);
+        }
+
+        if (row.Source == "서버팩" || row.Source == "DB백업")
+            return row.SourceKey;
+
+        return null;
+    }
+
+    private async Task BeginEditOriginalAsync()
+    {
+        if (contextMenuRow == null || !CanEditOriginal(contextMenuRow))
+        {
+            MessageBox.Show(this,
+                "이 항목은 원본 직접 수정 대상이 아닙니다.\n실제 텍스트 파일과 서버팩 폴더의 텍스트 파일만 직접 수정할 수 있습니다.",
+                "원본 파일 수정", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        string? path = GetOriginalFilePath(contextMenuRow);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            byte[] data = await File.ReadAllBytesAsync(path);
+            var info = DetectEditableEncoding(data);
+            string text = DecodeWithEncoding(data, info);
+
+            currentRow = contextMenuRow;
+            currentRaw = data;
+            currentName = Path.GetFileName(path);
+
+            ClearPreview();
+
+            editFilePath = path;
+            editEncoding = info.Encoding;
+            editEmitBom = info.EmitBom;
+            editOriginalText = text;
+            editMode = true;
+
+            textPreview.ReadOnly = false;
+            textPreview.Text = text;
+            textPreview.Visible = true;
+            textPreview.BringToFront();
+            textPreview.Focus();
+
+            grid.Enabled = false;
+            lblInfo.Text =
+                $"원본 편집 | {contextMenuRow.Path} | {info.Name} | Ctrl+S 저장 / Esc 취소";
+            status.Text = "원본 편집 중 - Ctrl+S 저장 / Esc 취소";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "원본 파일 열기 실패",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private async void TextPreview_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!editMode)
+            return;
+
+        if (e.Control && e.KeyCode == Keys.S)
+        {
+            e.SuppressKeyPress = true;
+            await SaveOriginalEditAsync();
+            return;
+        }
+
+        if (e.KeyCode == Keys.Escape)
+        {
+            e.SuppressKeyPress = true;
+            CancelOriginalEdit();
+        }
+    }
+
+    private async Task SaveOriginalEditAsync()
+    {
+        if (!editMode || string.IsNullOrWhiteSpace(editFilePath) || editEncoding == null)
+            return;
+
+        try
+        {
+            string backup = editFilePath + ".bak";
+
+            if (!File.Exists(backup))
+                File.Copy(editFilePath, backup, overwrite: false);
+
+            string text = textPreview.Text;
+            byte[] body = editEncoding.GetBytes(text);
+
+            byte[] output;
+            byte[] preamble = editEmitBom ? editEncoding.GetPreamble() : Array.Empty<byte>();
+
+            if (preamble.Length > 0)
+            {
+                output = new byte[preamble.Length + body.Length];
+                Buffer.BlockCopy(preamble, 0, output, 0, preamble.Length);
+                Buffer.BlockCopy(body, 0, output, preamble.Length, body.Length);
+            }
+            else
+            {
+                output = body;
+            }
+
+            await File.WriteAllBytesAsync(editFilePath, output);
+
+            currentRaw = output;
+            editOriginalText = text;
+
+            if (currentRow != null)
+            {
+                try
+                {
+                    currentRow.SizeBytes = output.LongLength;
+                    currentRow.SearchText = text;
+                }
+                catch { }
+            }
+
+            string saved = editFilePath;
+            ExitEditMode();
+            status.Text = $"원본 저장 완료: {saved} | 백업: {backup}";
+            grid.Refresh();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "원본 저장 실패",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void CancelOriginalEdit()
+    {
+        if (!editMode)
+            return;
+
+        textPreview.Text = editOriginalText;
+        ExitEditMode();
+        status.Text = "원본 수정 취소";
+    }
+
+    private void ExitEditMode()
+    {
+        editMode = false;
+        editFilePath = null;
+        editEncoding = null;
+        editEmitBom = false;
+        editOriginalText = "";
+
+        textPreview.ReadOnly = true;
+        grid.Enabled = true;
+        grid.Focus();
+    }
+
+    private static EditableEncodingInfo DetectEditableEncoding(byte[] data)
+    {
+        if (data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
+            return new EditableEncodingInfo(new UTF8Encoding(false), true, 3, "UTF-8 BOM");
+
+        if (data.Length >= 2 && data[0] == 0xFF && data[1] == 0xFE)
+            return new EditableEncodingInfo(new UnicodeEncoding(false, false), true, 2, "UTF-16 LE");
+
+        if (data.Length >= 2 && data[0] == 0xFE && data[1] == 0xFF)
+            return new EditableEncodingInfo(new UnicodeEncoding(true, false), true, 2, "UTF-16 BE");
+
+        try
+        {
+            _ = new UTF8Encoding(false, true).GetString(data);
+            return new EditableEncodingInfo(new UTF8Encoding(false), false, 0, "UTF-8");
+        }
+        catch
+        {
+            return new EditableEncodingInfo(Encoding.GetEncoding(949), false, 0, "CP949/EUC-KR");
+        }
+    }
+
+    private static string DecodeWithEncoding(byte[] data, EditableEncodingInfo info)
+    {
+        int offset = Math.Min(info.PreambleLength, data.Length);
+        return info.Encoding.GetString(data, offset, data.Length - offset);
     }
 
     private void ChooseFolder()
@@ -1326,6 +1598,9 @@ internal sealed class ClientInspectorForm : Form
 
     private void ClearPreview()
     {
+        if (!editMode)
+            textPreview.ReadOnly = true;
+
         textPreview.Visible = false;
         imagePreview.Visible = false;
         sprPreview.Visible = false;
@@ -1543,6 +1818,7 @@ internal sealed class ClientInspectorForm : Form
     }
 
     private sealed record DecodedText(string Text, string EncodingName);
+    private sealed record EditableEncodingInfo(Encoding Encoding, bool EmitBom, int PreambleLength, string Name);
 
     private sealed class ScanResult
     {
