@@ -1,22 +1,25 @@
-Lineage Client Inspector V1.8
+Lineage Client Inspector V1.9
 
-[DB SQL 행 단위 통합 검색]
-- Navicat에서 내보낸 .sql dump를 선택하면 통합 검색 시 INSERT 행 단위로 검색
-- 결과에 실제 테이블명과 SQL 라인 번호 표시
-- 동일 검색어가 여러 테이블에 있으면 각각 별도 결과로 표시
-- 결과 클릭 시 해당 INSERT SQL 한 줄을 오른쪽에서 바로 확인
-- 클라이언트 / IDX·PAK 내부 / Navicat SQL dump를 한 검색어로 동시에 검색
+[정확 검색 강화]
+- 경로 전체 / 확장자 / 컨테이너 문자열 때문에 걸리는 잡결과 제거
+- 파일명(내부 파일명 포함)과 실제 의미있는 텍스트만 검색
+- 숫자 검색은 앞뒤 숫자 경계를 검사
+  예: 3000209 검색 시 13000209 / 30002090 은 제외
+- SQL은 INSERT INTO / REPLACE INTO 실제 데이터 행 중심으로 검색
+- CREATE TABLE은 테이블명을 정확히 입력한 경우만 결과 표시
+- 동일 결과 중복 제거
+- 결과 최대 500건. 초과 시 검색어를 구체화하도록 안내
+- 1~3자리 숫자는 DB/본문 검색 제외
+  예: 61 검색은 DB의 수많은 61 값 대신 클라이언트 파일명/SPR 이름 위주로 검색
+- 4자리 이상 ID는 DB 실제값까지 검색
+  예: 3000209, 40019
 
-예:
-3000209 검색 시
-- DB SQL | etcitem | line ...
-- DB SQL | shop | line ...
-- DB SQL | shop_copy | line ...
-처럼 분리 표시
-
-[노이즈 제거 유지]
-- EXE/DLL/BIN/DAT 등의 원시 HEX 우연 일치는 검색 결과에서 제외
-- 텍스트/SQL/HTML/XML/JSON 등 의미 있는 정보 위주로 검색
+[통합 검색 대상]
+- 클라이언트 실제 파일명
+- IDX/PAK 내부 파일명
+- HTML/TXT/XML/JSON/INI/JS/CSS/LUA/SQL 등의 실제 텍스트
+- Navicat SQL dump 실제 INSERT/REPLACE 행
+- PSC 내부에서 해석된 의미있는 텍스트
 
 [미리보기]
 - 텍스트/SQL → 원문
