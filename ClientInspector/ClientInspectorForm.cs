@@ -11,6 +11,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly Button btnBrowse = new() { Text = "클라 폴더 선택", AutoSize = true };
     private readonly Button btnScan = new() { Text = "전체 검사", AutoSize = true };
     private readonly Button btnDbBackup = new() { Text = "나비캣 PSC 선택", AutoSize = true };
+    private readonly Button btnServerPack = new() { Text = "서버팩 ZIP 선택", AutoSize = true };
     private readonly TextBox txtSearch = new() { Width = 260, PlaceholderText = "통합 검색 (예: 3000209 / autohunt / 61-)" };
     private readonly Button btnGlobalSearch = new() { Text = "통합 검색", AutoSize = true };
     private readonly ComboBox cboType = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
@@ -92,6 +93,7 @@ internal sealed class ClientInspectorForm : Form
     private List<ViewRow>? globalSearchResults;
     private readonly Dictionary<string, AnyPakScanner> scanners = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ViewRow> externalBackupRows = new();
+    private readonly List<ViewRow> externalServerRows = new();
 
     private string? rootPath;
     private byte[]? currentRaw;
@@ -101,7 +103,8 @@ internal sealed class ClientInspectorForm : Form
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".html", ".htm", ".xml", ".txt", ".json", ".ini", ".cfg", ".conf",
-        ".properties", ".js", ".css", ".lua", ".csv", ".log", ".md", ".yml", ".yaml", ".sql"
+        ".properties", ".js", ".css", ".lua", ".csv", ".log", ".md", ".yml", ".yaml", ".sql",
+        ".java", ".bat", ".cmd", ".ps1", ".mf", ".prefs"
     };
 
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -113,35 +116,36 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V1.9 - 정확 통합 검색";
+        Text = "Lineage Client Inspector V2.0 - 클라 + DB + 서버팩 통합 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1180, 720);
         Font = new Font("Malgun Gothic", 9F);
 
-        cboType.Items.AddRange(new object[] { "전체", "이미지", "HTML/텍스트", "SPR", "DB백업", "기타" });
+        cboType.Items.AddRange(new object[] { "전체", "서버팩", "이미지", "HTML/텍스트", "SPR", "DB백업", "기타" });
         cboType.SelectedIndex = 0;
 
         var top = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             Height = 44,
-            ColumnCount = 10,
+            ColumnCount = 11,
             Padding = new Padding(6)
         };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 1; i < 10; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 1; i < 11; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.Controls.Add(txtRoot, 0, 0);
         top.Controls.Add(btnBrowse, 1, 0);
         top.Controls.Add(btnScan, 2, 0);
         top.Controls.Add(btnDbBackup, 3, 0);
-        top.Controls.Add(cboType, 4, 0);
-        top.Controls.Add(txtSearch, 5, 0);
-        top.Controls.Add(btnGlobalSearch, 6, 0);
-        top.Controls.Add(btnHash, 7, 0);
-        top.Controls.Add(btnSave, 8, 0);
-        top.Controls.Add(lblCount, 9, 0);
+        top.Controls.Add(btnServerPack, 4, 0);
+        top.Controls.Add(cboType, 5, 0);
+        top.Controls.Add(txtSearch, 6, 0);
+        top.Controls.Add(btnGlobalSearch, 7, 0);
+        top.Controls.Add(btnHash, 8, 0);
+        top.Controls.Add(btnSave, 9, 0);
+        top.Controls.Add(lblCount, 10, 0);
 
         var split = new SplitContainer
         {
@@ -179,6 +183,7 @@ internal sealed class ClientInspectorForm : Form
         btnBrowse.Click += (_, _) => ChooseFolder();
         btnScan.Click += async (_, _) => await ScanAsync();
         btnDbBackup.Click += async (_, _) => await ChooseDbBackupsAsync();
+        btnServerPack.Click += async (_, _) => await ChooseServerPacksAsync();
         btnGlobalSearch.Click += async (_, _) => await GlobalSearchAsync();
         txtSearch.KeyDown += async (_, e) =>
         {
@@ -254,6 +259,7 @@ internal sealed class ClientInspectorForm : Form
 
             allRows.AddRange(result.Rows);
             allRows.AddRange(externalBackupRows);
+            allRows.AddRange(externalServerRows);
             globalSearchResults = null;
             ApplyFilter();
 
@@ -326,6 +332,88 @@ internal sealed class ClientInspectorForm : Form
         return result;
     }
 
+    private async Task ChooseServerPacksAsync()
+    {
+        using var dlg = new OpenFileDialog
+        {
+            Title = "검색할 서버팩 ZIP 선택",
+            Filter = "서버팩 ZIP (*.zip)|*.zip|모든 파일 (*.*)|*.*",
+            Multiselect = true
+        };
+
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        SetBusy(true, "서버팩 ZIP 분석 중...");
+        try
+        {
+            externalServerRows.Clear();
+
+            foreach (string zipPath in dlg.FileNames)
+            {
+                await Task.Run(() => IndexServerPack(zipPath, externalServerRows));
+            }
+
+            foreach (var row in allRows.Where(x => x.Source == "서버팩").ToList())
+                allRows.Remove(row);
+
+            allRows.AddRange(externalServerRows);
+            globalSearchResults = null;
+            ApplyFilter();
+
+            int textCount = externalServerRows.Count(x => !string.IsNullOrEmpty(x.SearchText));
+            status.Text = $"서버팩 추가 완료: {dlg.FileNames.Length}개 ZIP | 파일 {externalServerRows.Count:N0}개 | 내용검색 가능 {textCount:N0}개";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.ToString(), "서버팩 분석 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            status.Text = "서버팩 분석 실패";
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private static void IndexServerPack(string zipPath, List<ViewRow> output)
+    {
+        using var fs = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var za = new ZipArchive(fs, ZipArchiveMode.Read);
+
+        foreach (var entry in za.Entries)
+        {
+            if (string.IsNullOrEmpty(entry.Name)) continue;
+
+            string ext = Path.GetExtension(entry.FullName);
+
+            var row = new ViewRow
+            {
+                Source = "서버팩",
+                Type = DetectType(entry.FullName),
+                Path = entry.FullName,
+                Container = Path.GetFileName(zipPath),
+                Extension = ext,
+                SizeBytes = entry.Length,
+                SourceKey = "SERVERZIP|" + zipPath + "|" + entry.FullName
+            };
+
+            // 서버팩의 실제 소스/설정/스크립트만 내용 색인.
+            // .class/.jar/.dll/.exe 같은 바이너리는 파일명 검색만 허용한다.
+            if (TextExtensions.Contains(ext) && entry.Length <= 4L * 1024 * 1024)
+            {
+                try
+                {
+                    using var es = entry.Open();
+                    using var ms = new MemoryStream();
+                    es.CopyTo(ms);
+                    row.SearchText = DecodeText(ms.ToArray()).Text;
+                }
+                catch { }
+            }
+
+            output.Add(row);
+        }
+    }
+
     private async Task ChooseDbBackupsAsync()
     {
         using var dlg = new OpenFileDialog
@@ -377,17 +465,9 @@ internal sealed class ClientInspectorForm : Form
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(rootPath) && Directory.Exists(rootPath))
-            {
-                foreach (var row in allRows.Where(x => x.Source == "DB백업" || x.Source == "PSC 내부").ToList())
-                    allRows.Remove(row);
-                allRows.AddRange(externalBackupRows);
-            }
-            else
-            {
-                allRows.Clear();
-                allRows.AddRange(externalBackupRows);
-            }
+            foreach (var row in allRows.Where(x => x.Source == "DB백업" || x.Source == "PSC 내부").ToList())
+                allRows.Remove(row);
+            allRows.AddRange(externalBackupRows);
 
             globalSearchResults = null;
             ApplyFilter();
@@ -467,7 +547,8 @@ internal sealed class ClientInspectorForm : Form
         IEnumerable<ViewRow> source = globalSearchResults ?? allRows;
 
         currentRows = source
-            .Where(r => type == "전체" || r.Type == type)
+            .Where(r => type == "전체" ||
+                        (type == "서버팩" ? r.Source == "서버팩" : r.Type == type))
             .ToList();
 
         grid.DataSource = null;
@@ -955,6 +1036,24 @@ internal sealed class ClientInspectorForm : Form
         if (row.Source == "DB백업")
             return await File.ReadAllBytesAsync(row.SourceKey);
 
+        if (row.Source == "서버팩" && row.SourceKey.StartsWith("SERVERZIP|", StringComparison.Ordinal))
+        {
+            string payload = row.SourceKey["SERVERZIP|".Length..];
+            int split = payload.LastIndexOf('|');
+            if (split <= 0) throw new InvalidDataException("서버팩 ZIP 내부 경로가 잘못되었습니다.");
+
+            string zipPath = payload[..split];
+            string entryName = payload[(split + 1)..];
+
+            using var fs = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var za = new ZipArchive(fs, ZipArchiveMode.Read);
+            var entry = za.GetEntry(entryName) ?? throw new FileNotFoundException("서버팩 ZIP 내부 파일을 찾을 수 없습니다.", entryName);
+            using var es = entry.Open();
+            using var ms = new MemoryStream();
+            await es.CopyToAsync(ms);
+            return ms.ToArray();
+        }
+
         if (row.Source == "DB SQL")
             return Encoding.UTF8.GetBytes(row.SearchText ?? "");
 
@@ -1261,6 +1360,7 @@ internal sealed class ClientInspectorForm : Form
         btnBrowse.Enabled = !busy;
         btnScan.Enabled = !busy;
         btnDbBackup.Enabled = !busy;
+        btnServerPack.Enabled = !busy;
         btnGlobalSearch.Enabled = !busy;
         btnSave.Enabled = !busy;
         btnHash.Enabled = !busy;
