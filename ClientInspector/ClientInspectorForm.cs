@@ -16,7 +16,8 @@ internal sealed class ClientInspectorForm : Form
     private readonly TextBox txtSearch = new() { Width = 260, PlaceholderText = "통합 검색 (예: 3000209 / autohunt / 61-)" };
     private readonly Button btnGlobalSearch = new() { Text = "통합 검색", AutoSize = true };
     private readonly ComboBox cboType = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
-    private readonly Button btnSave = new() { Text = "선택 원본 저장", AutoSize = true };
+    private readonly Button btnSave = new() { Text = "선택 추출", AutoSize = true };
+    private readonly Button btnOpenExtract = new() { Text = "추출 폴더 열기", AutoSize = true };
     private readonly Button btnHash = new() { Text = "SHA-256", AutoSize = true };
     private readonly Label lblCount = new() { AutoSize = true, Padding = new Padding(8, 7, 0, 0) };
 
@@ -67,9 +68,49 @@ internal sealed class ClientInspectorForm : Form
     {
         Dock = DockStyle.Fill,
         SizeMode = PictureBoxSizeMode.Zoom,
-        BackColor = Color.FromArgb(28, 31, 38),
+        BackColor = Color.FromArgb(28, 31, 38)
+    };
+
+    private readonly PictureBox imageModifiedPreview = new()
+    {
+        Dock = DockStyle.Fill,
+        SizeMode = PictureBoxSizeMode.Zoom,
+        BackColor = Color.FromArgb(28, 31, 38)
+    };
+
+    private readonly Panel imageCompareHost = new() { Dock = DockStyle.Fill, Visible = false };
+    private readonly Label lblImageOriginalInfo = new()
+    {
+        Dock = DockStyle.Bottom,
+        Height = 66,
+        Padding = new Padding(8),
+        AutoEllipsis = true
+    };
+    private readonly Label lblImageModifiedInfo = new()
+    {
+        Dock = DockStyle.Bottom,
+        Height = 66,
+        Padding = new Padding(8),
+        AutoEllipsis = true
+    };
+    private readonly FlowLayoutPanel imageToolBar = new()
+    {
+        Dock = DockStyle.Bottom,
+        Height = 40,
+        FlowDirection = FlowDirection.LeftToRight,
+        WrapContents = false,
+        Padding = new Padding(6, 5, 6, 4),
         Visible = false
     };
+    private readonly Button btnLoadModifiedImage = new() { Text = "수정 이미지 불러오기", AutoSize = true };
+    private readonly Button btnColorTest = new() { Text = "색상 테스트", AutoSize = true };
+    private readonly Button btnResetModifiedImage = new() { Text = "수정본 초기화", AutoSize = true };
+    private readonly Button btnApplyModifiedImage = new() { Text = "수정본 등록", AutoSize = true };
+
+    private Bitmap? currentOriginalBitmap;
+    private Bitmap? currentModifiedBitmap;
+    private byte[]? currentModifiedImageBytes;
+    private string currentModifiedImageFormat = "";
 
     private readonly PictureBox sprPreview = new()
     {
@@ -133,7 +174,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.7 - 자연정렬 + SPR 자동재생";
+        Text = "Lineage Client Inspector V2.8 - 이미지 추출/비교/등록";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -147,11 +188,11 @@ internal sealed class ClientInspectorForm : Form
         {
             Dock = DockStyle.Top,
             Height = 44,
-            ColumnCount = 11,
+            ColumnCount = 12,
             Padding = new Padding(6)
         };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 1; i < 11; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 1; i < 12; i++) top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         top.Controls.Add(txtRoot, 0, 0);
         top.Controls.Add(btnBrowse, 1, 0);
         top.Controls.Add(btnScan, 2, 0);
@@ -162,7 +203,8 @@ internal sealed class ClientInspectorForm : Form
         top.Controls.Add(btnGlobalSearch, 7, 0);
         top.Controls.Add(btnHash, 8, 0);
         top.Controls.Add(btnSave, 9, 0);
-        top.Controls.Add(lblCount, 10, 0);
+        top.Controls.Add(btnOpenExtract, 10, 0);
+        top.Controls.Add(lblCount, 11, 0);
 
         var split = new SplitContainer
         {
@@ -173,8 +215,33 @@ internal sealed class ClientInspectorForm : Form
 
         split.Panel1.Controls.Add(grid);
 
+        var originalImagePanel = new Panel { Dock = DockStyle.Fill };
+        originalImagePanel.Controls.Add(imagePreview);
+        originalImagePanel.Controls.Add(lblImageOriginalInfo);
+
+        var modifiedImagePanel = new Panel { Dock = DockStyle.Fill };
+        modifiedImagePanel.Controls.Add(imageModifiedPreview);
+        modifiedImagePanel.Controls.Add(lblImageModifiedInfo);
+
+        var imageSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            SplitterDistance = 360
+        };
+        imageSplit.Panel1.Controls.Add(originalImagePanel);
+        imageSplit.Panel2.Controls.Add(modifiedImagePanel);
+
+        imageToolBar.Controls.Add(btnLoadModifiedImage);
+        imageToolBar.Controls.Add(btnColorTest);
+        imageToolBar.Controls.Add(btnResetModifiedImage);
+        imageToolBar.Controls.Add(btnApplyModifiedImage);
+
+        imageCompareHost.Controls.Add(imageSplit);
+        imageCompareHost.Controls.Add(imageToolBar);
+
         previewHost.Controls.Add(textPreview);
-        previewHost.Controls.Add(imagePreview);
+        previewHost.Controls.Add(imageCompareHost);
         previewHost.Controls.Add(sprPreview);
         previewHost.Controls.Add(hexPreview);
 
@@ -256,6 +323,11 @@ internal sealed class ClientInspectorForm : Form
         btnSprAuto.Click += (_, _) => ToggleSprAuto();
         sprAutoTimer.Tick += (_, _) => AdvanceSprFrame();
         btnSave.Click += async (_, _) => await SaveSelectedAsync();
+        btnOpenExtract.Click += (_, _) => OpenExtractFolder();
+        btnLoadModifiedImage.Click += async (_, _) => await LoadModifiedImageAsync();
+        btnColorTest.Click += (_, _) => ApplyColorTest();
+        btnResetModifiedImage.Click += (_, _) => ResetModifiedImage();
+        btnApplyModifiedImage.Click += async (_, _) => await ApplyModifiedImageAsync();
         btnHash.Click += async (_, _) => await HashSelectedAsync();
 
         grid.DataBindingComplete += (_, _) =>
@@ -275,6 +347,9 @@ internal sealed class ClientInspectorForm : Form
             sprAutoTimer.Stop();
             foreach (var scanner in scanners.Values) scanner.Dispose();
             imagePreview.Image?.Dispose();
+            imageModifiedPreview.Image?.Dispose();
+            currentOriginalBitmap?.Dispose();
+            currentModifiedBitmap?.Dispose();
             sprPreview.Image?.Dispose();
         };
     }
@@ -2353,14 +2428,42 @@ internal sealed class ClientInspectorForm : Form
     {
         using var ms = new MemoryStream(data, writable: false);
         using var src = Image.FromStream(ms, useEmbeddedColorManagement: true, validateImageData: true);
-        var clone = new Bitmap(src);
+        var original = new Bitmap(src);
+
+        currentOriginalBitmap?.Dispose();
+        currentOriginalBitmap = new Bitmap(original);
+
+        currentModifiedBitmap?.Dispose();
+        currentModifiedBitmap = new Bitmap(original);
+        currentModifiedImageBytes = (byte[])data.Clone();
+        currentModifiedImageFormat = DetectImageFormat(data);
 
         imagePreview.Image?.Dispose();
-        imagePreview.Image = clone;
-        imagePreview.Visible = true;
-        imagePreview.BringToFront();
+        imagePreview.Image = new Bitmap(currentOriginalBitmap);
 
-        lblInfo.Text += $" | {clone.Width}x{clone.Height} | {DetectImageFormat(data)}";
+        imageModifiedPreview.Image?.Dispose();
+        imageModifiedPreview.Image = new Bitmap(currentModifiedBitmap);
+
+        string sourceText = currentRow == null ? "" :
+            currentRow.Source == "PAK 내부"
+                ? $"PAK 내부 | {currentRow.Container}"
+                : GetOriginalFilePath(currentRow) ?? currentRow.Source;
+
+        lblImageOriginalInfo.Text =
+            $"원본  {original.Width} × {original.Height}px | {DetectImageFormat(data)} | " +
+            $"{original.PixelFormat} | {data.LongLength:N0} bytes | " +
+            $"DPI {original.HorizontalResolution:0.#}×{original.VerticalResolution:0.#}\r\n" +
+            $"위치: {sourceText}";
+
+        lblImageModifiedInfo.Text =
+            $"수정본  {original.Width} × {original.Height}px | 아직 원본과 동일";
+
+        imageCompareHost.Visible = true;
+        imageCompareHost.BringToFront();
+        imageToolBar.Visible = true;
+
+        lblInfo.Text +=
+            $" | 원본 이미지 {original.Width}x{original.Height} | {DetectImageFormat(data)} | {original.PixelFormat}";
     }
 
     private async Task RenderSprFrameAsync()
@@ -2429,22 +2532,363 @@ internal sealed class ClientInspectorForm : Form
 
     private async Task SaveSelectedAsync()
     {
-        if (currentRaw == null)
+        if (currentRaw == null || currentRow == null)
         {
             MessageBox.Show(this, "먼저 파일을 선택하세요.");
             return;
         }
 
-        using var dlg = new SaveFileDialog
+        string folder = GetExtractFolder();
+        Directory.CreateDirectory(folder);
+
+        string safeName = Path.GetFileName(currentRow.Path.TrimEnd('\\', '/'));
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = string.IsNullOrWhiteSpace(currentName) ? "selected.bin" : currentName;
+
+        string target = MakeUniquePath(Path.Combine(folder, safeName));
+        await File.WriteAllBytesAsync(target, currentRaw);
+
+        status.Text = $"추출 완료: {target}";
+        MessageBox.Show(this,
+            $"선택한 원본을 추출했습니다.\n\n{target}",
+            "선택 추출 완료",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private static string GetExtractFolder()
+    {
+        return Path.Combine(AppContext.BaseDirectory, "Extracted");
+    }
+
+    private void OpenExtractFolder()
+    {
+        string folder = GetExtractFolder();
+        Directory.CreateDirectory(folder);
+
+        try
         {
-            FileName = string.IsNullOrWhiteSpace(currentName) ? "selected.bin" : currentName,
-            Filter = "모든 파일 (*.*)|*.*"
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = folder,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "추출 폴더 열기 실패",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static string MakeUniquePath(string path)
+    {
+        if (!File.Exists(path))
+            return path;
+
+        string dir = Path.GetDirectoryName(path) ?? "";
+        string stem = Path.GetFileNameWithoutExtension(path);
+        string ext = Path.GetExtension(path);
+
+        for (int i = 1; i < 10000; i++)
+        {
+            string candidate = Path.Combine(dir, $"{stem}_{i}{ext}");
+            if (!File.Exists(candidate))
+                return candidate;
+        }
+
+        return Path.Combine(dir, $"{stem}_{DateTime.Now:yyyyMMdd_HHmmssfff}{ext}");
+    }
+
+    private async Task LoadModifiedImageAsync()
+    {
+        if (currentOriginalBitmap == null || currentRow == null)
+        {
+            MessageBox.Show(this, "먼저 원본 이미지를 선택하세요.");
+            return;
+        }
+
+        using var dlg = new OpenFileDialog
+        {
+            Title = "수정 이미지 선택",
+            Filter = "이미지 파일|*.png;*.bmp;*.jpg;*.jpeg;*.gif;*.tif;*.tiff;*.ico|모든 파일|*.*"
         };
 
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (dlg.ShowDialog(this) != DialogResult.OK)
+            return;
 
-        await File.WriteAllBytesAsync(dlg.FileName, currentRaw);
-        status.Text = "원본 저장 완료";
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(dlg.FileName);
+            using var ms = new MemoryStream(bytes, writable: false);
+            using var img = Image.FromStream(ms, true, true);
+            var bmp = new Bitmap(img);
+
+            currentModifiedBitmap?.Dispose();
+            currentModifiedBitmap = bmp;
+            currentModifiedImageBytes = bytes;
+            currentModifiedImageFormat = DetectImageFormat(bytes);
+
+            imageModifiedPreview.Image?.Dispose();
+            imageModifiedPreview.Image = new Bitmap(currentModifiedBitmap);
+
+            bool sameSize =
+                currentOriginalBitmap.Width == currentModifiedBitmap.Width &&
+                currentOriginalBitmap.Height == currentModifiedBitmap.Height;
+
+            lblImageModifiedInfo.Text =
+                $"수정본  {bmp.Width} × {bmp.Height}px | {currentModifiedImageFormat} | {bmp.PixelFormat} | " +
+                $"{bytes.LongLength:N0} bytes\r\n" +
+                $"원본과 크기 {(sameSize ? "일치" : "불일치")} | 파일: {dlg.FileName}";
+
+            status.Text = $"수정 이미지 불러오기 완료: {dlg.FileName}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "수정 이미지 읽기 실패",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ApplyColorTest()
+    {
+        if (currentOriginalBitmap == null)
+        {
+            MessageBox.Show(this, "먼저 원본 이미지를 선택하세요.");
+            return;
+        }
+
+        using var dlg = new ColorDialog
+        {
+            Color = Color.CornflowerBlue,
+            FullOpen = true
+        };
+
+        if (dlg.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        var tinted = new Bitmap(
+            currentOriginalBitmap.Width,
+            currentOriginalBitmap.Height,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+        Color tint = dlg.Color;
+        const float blend = 0.42f;
+
+        for (int y = 0; y < currentOriginalBitmap.Height; y++)
+        {
+            for (int x = 0; x < currentOriginalBitmap.Width; x++)
+            {
+                Color c = currentOriginalBitmap.GetPixel(x, y);
+                if (c.A == 0)
+                {
+                    tinted.SetPixel(x, y, c);
+                    continue;
+                }
+
+                int r = (int)Math.Clamp(c.R * (1f - blend) + tint.R * blend, 0, 255);
+                int g = (int)Math.Clamp(c.G * (1f - blend) + tint.G * blend, 0, 255);
+                int b = (int)Math.Clamp(c.B * (1f - blend) + tint.B * blend, 0, 255);
+
+                tinted.SetPixel(x, y, Color.FromArgb(c.A, r, g, b));
+            }
+        }
+
+        currentModifiedBitmap?.Dispose();
+        currentModifiedBitmap = tinted;
+
+        imageModifiedPreview.Image?.Dispose();
+        imageModifiedPreview.Image = new Bitmap(tinted);
+
+        currentModifiedImageBytes = EncodeBitmapForOriginal(tinted, currentModifiedImageFormat);
+        currentModifiedImageFormat = DetectImageFormat(currentModifiedImageBytes);
+
+        lblImageModifiedInfo.Text =
+            $"수정본  {tinted.Width} × {tinted.Height}px | 색상 테스트 {ColorTranslator.ToHtml(tint)} | " +
+            $"{currentModifiedImageFormat} | {currentModifiedImageBytes.LongLength:N0} bytes";
+
+        status.Text = "색상 테스트 적용 - 아직 원본에는 등록하지 않았습니다.";
+    }
+
+    private void ResetModifiedImage()
+    {
+        if (currentOriginalBitmap == null || currentRaw == null)
+            return;
+
+        currentModifiedBitmap?.Dispose();
+        currentModifiedBitmap = new Bitmap(currentOriginalBitmap);
+        currentModifiedImageBytes = (byte[])currentRaw.Clone();
+        currentModifiedImageFormat = DetectImageFormat(currentRaw);
+
+        imageModifiedPreview.Image?.Dispose();
+        imageModifiedPreview.Image = new Bitmap(currentModifiedBitmap);
+
+        lblImageModifiedInfo.Text =
+            $"수정본  {currentModifiedBitmap.Width} × {currentModifiedBitmap.Height}px | 원본으로 초기화";
+
+        status.Text = "수정본을 원본 상태로 초기화했습니다.";
+    }
+
+    private async Task ApplyModifiedImageAsync()
+    {
+        if (currentRow == null || currentOriginalBitmap == null ||
+            currentModifiedBitmap == null || currentModifiedImageBytes == null)
+        {
+            MessageBox.Show(this, "먼저 원본 이미지와 수정본을 준비하세요.");
+            return;
+        }
+
+        if (currentOriginalBitmap.Width != currentModifiedBitmap.Width ||
+            currentOriginalBitmap.Height != currentModifiedBitmap.Height)
+        {
+            MessageBox.Show(this,
+                "수정 이미지의 가로/세로 크기가 원본과 다릅니다.\n게임 UI/GFX 안전성을 위해 동일 크기만 등록합니다.",
+                "수정본 등록 중지",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        string originalFormat = DetectImageFormat(currentRaw ?? Array.Empty<byte>());
+        if (originalFormat == "미확인")
+        {
+            MessageBox.Show(this,
+                "선택한 원본은 표준 PNG/BMP/JPEG/GIF/ICO 이미지가 아닙니다.\n" +
+                "현재 버전에서는 이 포맷을 안전하게 다시 인코딩할 수 없어 원본 등록을 하지 않습니다.",
+                "수정본 등록 불가",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        byte[] replacement = EncodeBitmapForOriginal(currentModifiedBitmap, originalFormat);
+
+        var answer = MessageBox.Show(this,
+            $"수정 이미지를 원본에 등록합니다.\n\n" +
+            $"대상: {currentRow.Path}\n" +
+            $"크기: {currentModifiedBitmap.Width}×{currentModifiedBitmap.Height}\n" +
+            $"포맷: {originalFormat}\n\n" +
+            "적용 전에 자동 백업합니다. 계속할까요?",
+            "수정본 등록",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (answer != DialogResult.Yes)
+            return;
+
+        try
+        {
+            if (currentRow.Source == "실제파일" || currentRow.Source == "서버팩")
+            {
+                string? path = GetOriginalFilePath(currentRow);
+                if (string.IsNullOrWhiteSpace(path))
+                    throw new InvalidOperationException("원본 파일 경로를 확인할 수 없습니다.");
+
+                string backup = path + ".image.bak";
+                if (!File.Exists(backup))
+                    File.Copy(path, backup, false);
+
+                await File.WriteAllBytesAsync(path, replacement);
+                currentRaw = replacement;
+                currentRow.SizeBytes = replacement.LongLength;
+
+                status.Text = $"수정 이미지 등록 완료: {path} | 백업: {backup}";
+            }
+            else if (currentRow.Source == "PAK 내부")
+            {
+                if (!scanners.TryGetValue(currentRow.SourceKey, out var scanner))
+                    throw new InvalidOperationException("선택한 PAK 정보를 찾지 못했습니다.");
+
+                if (!scanner.Format.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase) || scanner.DesEncrypted)
+                {
+                    MessageBox.Show(this,
+                        $"현재 PAK 형식은 {scanner.Format}{(scanner.DesEncrypted ? " / DES" : "")} 입니다.\n" +
+                        "안전하게 검증된 LEGACY28 비암호화 PAK만 직접 재등록합니다.\n" +
+                        "수정본은 오른쪽에서 확인하거나 '선택 추출'로 저장할 수 있습니다.",
+                        "PAK 직접 등록 제한",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string idxPath = currentRow.SourceKey;
+                string pakPath = Path.ChangeExtension(idxPath, ".pak");
+                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                string idxBackup = idxPath + ".imagebak_" + stamp;
+                string pakBackup = pakPath + ".imagebak_" + stamp;
+
+                File.Copy(idxPath, idxBackup, false);
+                File.Copy(pakPath, pakBackup, false);
+
+                using var pak = new SpritePak(idxPath);
+                pak.RebuildLegacyPak(new Dictionary<string, byte[]>
+                {
+                    [currentRow.Path] = replacement
+                });
+
+                currentRaw = replacement;
+                currentRow.SizeBytes = replacement.LongLength;
+
+                if (scanners.TryGetValue(idxPath, out var oldScanner))
+                    oldScanner.Dispose();
+                scanners[idxPath] = new AnyPakScanner(idxPath);
+
+                status.Text =
+                    $"PAK 수정 이미지 등록 완료: {currentRow.Path} | 백업: {Path.GetFileName(idxBackup)}, {Path.GetFileName(pakBackup)}";
+            }
+            else
+            {
+                MessageBox.Show(this,
+                    "이 위치의 이미지는 직접 원본 등록 대상이 아닙니다.\n수정본을 추출해서 사용할 수 있습니다.",
+                    "수정본 등록",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            currentModifiedImageBytes = (byte[])replacement.Clone();
+            currentModifiedImageFormat = originalFormat;
+            lblImageModifiedInfo.Text += "\r\n원본 등록 완료";
+
+            MessageBox.Show(this,
+                "수정 이미지 등록이 완료되었습니다.\n자동 백업도 생성했습니다.",
+                "등록 완료",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.ToString(), "수정 이미지 등록 실패",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            status.Text = "수정 이미지 등록 실패";
+        }
+    }
+
+    private static byte[] EncodeBitmapForOriginal(Bitmap bitmap, string format)
+    {
+        using var ms = new MemoryStream();
+
+        switch (format.ToUpperInvariant())
+        {
+            case "BMP":
+                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
+                break;
+            case "JPEG":
+                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Jpeg);
+                break;
+            case "GIF":
+                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Gif);
+                break;
+            case "ICO":
+                // System.Drawing은 Bitmap을 ICO로 안정적으로 재인코딩하지 못하므로 PNG로 보존하지 않고 차단.
+                throw new NotSupportedException("ICO 수정본 직접 등록은 현재 지원하지 않습니다.");
+            case "PNG":
+            default:
+                bitmap.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                break;
+        }
+
+        return ms.ToArray();
     }
 
     private async Task HashSelectedAsync()
@@ -2468,7 +2912,8 @@ internal sealed class ClientInspectorForm : Form
             textPreview.ReadOnly = true;
 
         textPreview.Visible = false;
-        imagePreview.Visible = false;
+        imageCompareHost.Visible = false;
+        imageToolBar.Visible = false;
         sprPreview.Visible = false;
         hexPreview.Visible = false;
         sprBar.Visible = false;
@@ -2477,6 +2922,18 @@ internal sealed class ClientInspectorForm : Form
         hexPreview.Clear();
         imagePreview.Image?.Dispose();
         imagePreview.Image = null;
+        imageModifiedPreview.Image?.Dispose();
+        imageModifiedPreview.Image = null;
+
+        currentOriginalBitmap?.Dispose();
+        currentOriginalBitmap = null;
+        currentModifiedBitmap?.Dispose();
+        currentModifiedBitmap = null;
+        currentModifiedImageBytes = null;
+        currentModifiedImageFormat = "";
+        lblImageOriginalInfo.Text = "";
+        lblImageModifiedInfo.Text = "";
+
         sprPreview.Image?.Dispose();
         sprPreview.Image = null;
         lblSpr.Text = "";
@@ -2675,6 +3132,11 @@ internal sealed class ClientInspectorForm : Form
         btnServerPack.Enabled = !busy;
         btnGlobalSearch.Enabled = !busy;
         btnSave.Enabled = !busy;
+        btnOpenExtract.Enabled = !busy;
+        btnLoadModifiedImage.Enabled = !busy;
+        btnColorTest.Enabled = !busy;
+        btnResetModifiedImage.Enabled = !busy;
+        btnApplyModifiedImage.Enabled = !busy;
         btnHash.Enabled = !busy;
 
         progress.Value = busy ? 10 : 0;
