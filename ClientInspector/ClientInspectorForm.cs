@@ -95,17 +95,23 @@ internal sealed class ClientInspectorForm : Form
     };
     private readonly FlowLayoutPanel imageToolBar = new()
     {
-        Dock = DockStyle.Bottom,
-        Height = 40,
+        Dock = DockStyle.Top,
+        Height = 46,
         FlowDirection = FlowDirection.LeftToRight,
         WrapContents = false,
-        Padding = new Padding(6, 5, 6, 4),
-        Visible = false
+        Padding = new Padding(8, 7, 8, 5),
+        AutoScroll = true
     };
     private readonly Button btnLoadModifiedImage = new() { Text = "수정 이미지 불러오기", AutoSize = true };
-    private readonly Button btnColorTest = new() { Text = "색상 테스트", AutoSize = true };
+    private readonly Button btnColorTest = new() { Text = "원본 색상 변경 테스트", AutoSize = true };
     private readonly Button btnResetModifiedImage = new() { Text = "수정본 초기화", AutoSize = true };
     private readonly Button btnApplyModifiedImage = new() { Text = "수정본 등록", AutoSize = true };
+    private readonly Label lblColorTestGuide = new()
+    {
+        Text = "※ 왼쪽 원본 유지 / 오른쪽 수정본에만 색상 적용",
+        AutoSize = true,
+        Margin = new Padding(12, 7, 0, 0)
+    };
 
     private Bitmap? currentOriginalBitmap;
     private Bitmap? currentModifiedBitmap;
@@ -174,7 +180,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.8 - 이미지 추출/비교/등록";
+        Text = "Lineage Client Inspector V2.9 - 원본 색상 변경 테스트";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -236,9 +242,11 @@ internal sealed class ClientInspectorForm : Form
         imageToolBar.Controls.Add(btnColorTest);
         imageToolBar.Controls.Add(btnResetModifiedImage);
         imageToolBar.Controls.Add(btnApplyModifiedImage);
+        imageToolBar.Controls.Add(lblColorTestGuide);
 
         imageCompareHost.Controls.Add(imageSplit);
         imageCompareHost.Controls.Add(imageToolBar);
+        imageToolBar.BringToFront();
 
         previewHost.Controls.Add(textPreview);
         previewHost.Controls.Add(imageCompareHost);
@@ -2461,6 +2469,7 @@ internal sealed class ClientInspectorForm : Form
         imageCompareHost.Visible = true;
         imageCompareHost.BringToFront();
         imageToolBar.Visible = true;
+        imageToolBar.BringToFront();
 
         lblInfo.Text +=
             $" | 원본 이미지 {original.Width}x{original.Height} | {DetectImageFormat(data)} | {original.PixelFormat}";
@@ -2707,7 +2716,7 @@ internal sealed class ClientInspectorForm : Form
             $"수정본  {tinted.Width} × {tinted.Height}px | 색상 테스트 {ColorTranslator.ToHtml(tint)} | " +
             $"{currentModifiedImageFormat} | {currentModifiedImageBytes.LongLength:N0} bytes";
 
-        status.Text = "색상 테스트 적용 - 아직 원본에는 등록하지 않았습니다.";
+        status.Text = "원본 색상 변경 테스트 적용 - 왼쪽 원본은 유지, 오른쪽 수정본만 변경됨";
     }
 
     private void ResetModifiedImage()
@@ -2913,7 +2922,6 @@ internal sealed class ClientInspectorForm : Form
 
         textPreview.Visible = false;
         imageCompareHost.Visible = false;
-        imageToolBar.Visible = false;
         sprPreview.Visible = false;
         hexPreview.Visible = false;
         sprBar.Visible = false;
