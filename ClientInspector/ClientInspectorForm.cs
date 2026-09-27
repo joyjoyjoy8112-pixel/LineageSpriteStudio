@@ -11,7 +11,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly Button btnBrowse = new() { Text = "클라 폴더 선택", AutoSize = true };
     private readonly Button btnScan = new() { Text = "전체 검사", AutoSize = true };
     private readonly Button btnDbBackup = new() { Text = "나비캣 PSC 선택", AutoSize = true };
-    private readonly Button btnServerPack = new() { Text = "서버팩 ZIP 선택", AutoSize = true };
+    private readonly Button btnServerPack = new() { Text = "서버팩 폴더 선택", AutoSize = true };
     private readonly TextBox txtSearch = new() { Width = 260, PlaceholderText = "통합 검색 (예: 3000209 / autohunt / 61-)" };
     private readonly Button btnGlobalSearch = new() { Text = "통합 검색", AutoSize = true };
     private readonly ComboBox cboType = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
@@ -116,7 +116,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.0 - 클라 + DB + 서버팩 통합 검색";
+        Text = "Lineage Client Inspector V2.1 - 클라 + DB + 서버팩 폴더 통합 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -183,7 +183,7 @@ internal sealed class ClientInspectorForm : Form
         btnBrowse.Click += (_, _) => ChooseFolder();
         btnScan.Click += async (_, _) => await ScanAsync();
         btnDbBackup.Click += async (_, _) => await ChooseDbBackupsAsync();
-        btnServerPack.Click += async (_, _) => await ChooseServerPacksAsync();
+        btnServerPack.Click += async (_, _) => await ChooseServerFolderAsync();
         btnGlobalSearch.Click += async (_, _) => await GlobalSearchAsync();
         txtSearch.KeyDown += async (_, e) =>
         {
@@ -332,26 +332,24 @@ internal sealed class ClientInspectorForm : Form
         return result;
     }
 
-    private async Task ChooseServerPacksAsync()
+    private async Task ChooseServerFolderAsync()
     {
-        using var dlg = new OpenFileDialog
+        using var dlg = new FolderBrowserDialog
         {
-            Title = "검색할 서버팩 ZIP 선택",
-            Filter = "서버팩 ZIP (*.zip)|*.zip|모든 파일 (*.*)|*.*",
-            Multiselect = true
+            Description = "검색할 서버팩 폴더를 선택하세요.",
+            UseDescriptionForTitle = true
         };
 
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
-        SetBusy(true, "서버팩 ZIP 분석 중...");
+        string serverRoot = dlg.SelectedPath;
+
+        SetBusy(true, "서버팩 폴더 분석 중...");
         try
         {
             externalServerRows.Clear();
 
-            foreach (string zipPath in dlg.FileNames)
-            {
-                await Task.Run(() => IndexServerPack(zipPath, externalServerRows));
-            }
+            await Task.Run(() => IndexServerFolder(serverRoot, externalServerRows));
 
             foreach (var row in allRows.Where(x => x.Source == "서버팩").ToList())
                 allRows.Remove(row);
@@ -361,12 +359,16 @@ internal sealed class ClientInspectorForm : Form
             ApplyFilter();
 
             int textCount = externalServerRows.Count(x => !string.IsNullOrEmpty(x.SearchText));
-            status.Text = $"서버팩 추가 완료: {dlg.FileNames.Length}개 ZIP | 파일 {externalServerRows.Count:N0}개 | 내용검색 가능 {textCount:N0}개";
+            int pscCount = externalServerRows.Count(x => x.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase));
+
+            status.Text =
+                $"서버팩 폴더 추가 완료: {Path.GetFileName(serverRoot)} | 파일 {externalServerRows.Count:N0}개 | " +
+                $"내용검색 {textCount:N0}개 | PSC {pscCount:N0}개";
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.ToString(), "서버팩 분석 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            status.Text = "서버팩 분석 실패";
+            MessageBox.Show(this, ex.ToString(), "서버팩 폴더 분석 오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            status.Text = "서버팩 폴더 분석 실패";
         }
         finally
         {
@@ -374,38 +376,53 @@ internal sealed class ClientInspectorForm : Form
         }
     }
 
-    private static void IndexServerPack(string zipPath, List<ViewRow> output)
+    private static void IndexServerFolder(string serverRoot, List<ViewRow> output)
     {
-        using var fs = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var za = new ZipArchive(fs, ZipArchiveMode.Read);
-
-        foreach (var entry in za.Entries)
+        foreach (string path in Directory.EnumerateFiles(serverRoot, "*", SearchOption.AllDirectories)
+                     .OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrEmpty(entry.Name)) continue;
+            FileInfo fi;
 
-            string ext = Path.GetExtension(entry.FullName);
+            try
+            {
+                fi = new FileInfo(path);
+            }
+            catch
+            {
+                continue;
+            }
+
+            string rel;
+            try
+            {
+                rel = Path.GetRelativePath(serverRoot, path);
+            }
+            catch
+            {
+                rel = fi.Name;
+            }
+
+            string ext = fi.Extension;
 
             var row = new ViewRow
             {
                 Source = "서버팩",
-                Type = DetectType(entry.FullName),
-                Path = entry.FullName,
-                Container = Path.GetFileName(zipPath),
+                Type = DetectType(rel),
+                Path = rel,
+                Container = serverRoot,
                 Extension = ext,
-                SizeBytes = entry.Length,
-                SourceKey = "SERVERZIP|" + zipPath + "|" + entry.FullName
+                SizeBytes = fi.Length,
+                SourceKey = path
             };
 
-            // 서버팩의 실제 소스/설정/스크립트만 내용 색인.
-            // .class/.jar/.dll/.exe 같은 바이너리는 파일명 검색만 허용한다.
-            if (TextExtensions.Contains(ext) && entry.Length <= 4L * 1024 * 1024)
+            // 서버팩 폴더의 실제 소스/설정/스크립트는 내용까지 색인한다.
+            // .class/.jar/.dll/.exe 등 바이너리는 파일명 검색만 허용한다.
+            if (TextExtensions.Contains(ext) && fi.Length <= 4L * 1024 * 1024)
             {
                 try
                 {
-                    using var es = entry.Open();
-                    using var ms = new MemoryStream();
-                    es.CopyTo(ms);
-                    row.SearchText = DecodeText(ms.ToArray()).Text;
+                    byte[] bytes = File.ReadAllBytes(path);
+                    row.SearchText = DecodeText(bytes).Text;
                 }
                 catch { }
             }
@@ -1205,23 +1222,8 @@ internal sealed class ClientInspectorForm : Form
         if (row.Source == "DB백업")
             return await File.ReadAllBytesAsync(row.SourceKey);
 
-        if (row.Source == "서버팩" && row.SourceKey.StartsWith("SERVERZIP|", StringComparison.Ordinal))
-        {
-            string payload = row.SourceKey["SERVERZIP|".Length..];
-            int split = payload.LastIndexOf('|');
-            if (split <= 0) throw new InvalidDataException("서버팩 ZIP 내부 경로가 잘못되었습니다.");
-
-            string zipPath = payload[..split];
-            string entryName = payload[(split + 1)..];
-
-            using var fs = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var za = new ZipArchive(fs, ZipArchiveMode.Read);
-            var entry = za.GetEntry(entryName) ?? throw new FileNotFoundException("서버팩 ZIP 내부 파일을 찾을 수 없습니다.", entryName);
-            using var es = entry.Open();
-            using var ms = new MemoryStream();
-            await es.CopyToAsync(ms);
-            return ms.ToArray();
-        }
+        if (row.Source == "서버팩")
+            return await File.ReadAllBytesAsync(row.SourceKey);
 
         if (row.Source == "DB SQL" || row.Source == "PSC 검색")
             return Encoding.UTF8.GetBytes(row.SearchText ?? "");
