@@ -129,7 +129,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V2.5 - 수정 + Java 컴파일";
+        Text = "Lineage Client Inspector V2.6 - 파일명 시작 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -1433,6 +1433,7 @@ internal sealed class ClientInspectorForm : Form
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool truncated = false;
             bool shortNumeric = q.All(char.IsDigit) && q.Length <= 3;
+            bool filePrefixOnly = IsNumericDashPrefixQuery(q);
 
             int clientHits = 0;
             int serverHits = 0;
@@ -1475,15 +1476,19 @@ internal sealed class ClientInspectorForm : Form
 
                     string? match = null;
 
-                    if (StrictContains(row.Path, q))
+                    if (FileNameStartsWith(row.Path, q))
                     {
-                        match = "파일명";
+                        match = "파일명 시작일치";
                     }
-                    else if (!shortNumeric && !string.IsNullOrEmpty(row.SearchText) && StrictContains(row.SearchText, q))
+                    else if (!filePrefixOnly && !shortNumeric &&
+                             !string.IsNullOrEmpty(row.SearchText) &&
+                             StrictContains(row.SearchText, q))
                     {
                         match = "의미있는 내용";
                     }
-                    else if (!shortNumeric && ShouldContentSearch(row) && await TextContentContainsAsync(row, q))
+                    else if (!filePrefixOnly && !shortNumeric &&
+                             ShouldContentSearch(row) &&
+                             await TextContentContainsAsync(row, q))
                     {
                         match = "텍스트 내용";
                     }
@@ -1512,7 +1517,7 @@ internal sealed class ClientInspectorForm : Form
             SetSourceSearching("DB", clientHits, serverHits, dbHits);
             Application.DoEvents();
 
-            if (!shortNumeric)
+            if (!shortNumeric && !filePrefixOnly)
             {
                 var dbPscRows = allRows
                     .Where(r => r.Source == "DB백업" &&
@@ -1583,7 +1588,7 @@ internal sealed class ClientInspectorForm : Form
                 SetSourceSearching("서버", clientHits, serverHits, dbHits);
                 Application.DoEvents();
 
-                if (!shortNumeric)
+                if (!shortNumeric && !filePrefixOnly)
                 {
                     var serverPscRows = allRows
                         .Where(r => r.Source == "서버팩" &&
@@ -1923,6 +1928,38 @@ internal sealed class ClientInspectorForm : Form
         }
 
         return results;
+    }
+
+    private static bool FileNameStartsWith(string path, string query)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(query))
+            return false;
+
+        string value = path.TrimEnd('\\', '/');
+        string fileName = Path.GetFileName(value);
+
+        if (string.IsNullOrEmpty(fileName))
+            fileName = value;
+
+        return fileName.StartsWith(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNumericDashPrefixQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+
+        int dash = query.IndexOf('-');
+        if (dash <= 0)
+            return false;
+
+        for (int i = 0; i < dash; i++)
+        {
+            if (!char.IsDigit(query[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool StrictContains(string text, string query)
