@@ -33,6 +33,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Lineage_Client_Inspector_V3.0_win-x64
+          name: Lineage_Client_Inspector_V3.1_win-x64
           path: publish-inspector
           if-no-files-found: error
