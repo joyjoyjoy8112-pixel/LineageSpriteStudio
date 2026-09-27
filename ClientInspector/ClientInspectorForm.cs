@@ -25,6 +25,7 @@ internal sealed class ClientInspectorForm : Form
     private readonly DataGridView gridFiles = NewGrid();
     private readonly DataGridView gridTexts = NewGrid();
     private readonly DataGridView gridAllView = NewGrid();
+    private readonly DataGridView gridImages = NewGrid();
 
     private readonly PictureBox preview = new()
     {
@@ -81,6 +82,18 @@ internal sealed class ClientInspectorForm : Form
     private readonly NumericUpDown universalSprFrame = new() { Minimum = 0, Maximum = 0, Width = 90 };
     private readonly Label universalSprInfo = new() { AutoSize = true, Padding = new Padding(6) };
 
+    private readonly TextBox txtImageFilter = new() { Width = 240, PlaceholderText = "이미지 검색 (예: .png / 29999)" };
+    private readonly Button btnImageFilter = new() { Text = "검색", AutoSize = true };
+    private readonly Button btnImageReset = new() { Text = "전체 이미지", AutoSize = true };
+    private readonly Button btnImageSave = new() { Text = "선택 원본 저장", AutoSize = true };
+    private readonly Label lblImageInfo = new() { AutoSize = true, Padding = new Padding(6) };
+    private readonly PictureBox dedicatedImage = new()
+    {
+        Dock = DockStyle.Fill,
+        SizeMode = PictureBoxSizeMode.Zoom,
+        BackColor = Color.FromArgb(26, 29, 36)
+    };
+
     private readonly BindingList<PackRow> packRows = new();
     private readonly BindingList<FileRow> fileRows = new();
     private readonly List<EntryRow> allEntries = new();
@@ -89,6 +102,8 @@ internal sealed class ClientInspectorForm : Form
     private List<TextRow> currentTextRows = new();
     private readonly List<UniversalRow> allViewRows = new();
     private List<UniversalRow> currentViewRows = new();
+    private readonly List<UniversalRow> imageRows = new();
+    private List<UniversalRow> currentImageRows = new();
     private readonly Dictionary<string, AnyPakScanner> scanners = new(StringComparer.OrdinalIgnoreCase);
 
     private string? rootPath;
@@ -96,6 +111,8 @@ internal sealed class ClientInspectorForm : Form
     private string currentTextSuggestedName = "text.bin";
     private byte[]? currentUniversalRaw;
     private string currentUniversalSuggestedName = "selected.bin";
+    private byte[]? currentImageRaw;
+    private string currentImageSuggestedName = "image.bin";
 
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -236,6 +253,29 @@ internal sealed class ClientInspectorForm : Form
         allSplit.Panel2.Controls.Add(allRight);
         tabAllView.Controls.Add(allSplit);
 
+        var tabImages = new TabPage("이미지 보기");
+        var imageSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 720 };
+
+        var imageLeft = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        imageLeft.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        imageLeft.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var imageBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(4) };
+        imageBar.Controls.Add(txtImageFilter);
+        imageBar.Controls.Add(btnImageFilter);
+        imageBar.Controls.Add(btnImageReset);
+        imageBar.Controls.Add(btnImageSave);
+        imageLeft.Controls.Add(imageBar, 0, 0);
+        imageLeft.Controls.Add(gridImages, 0, 1);
+        imageSplit.Panel1.Controls.Add(imageLeft);
+
+        var imageRight = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        imageRight.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        imageRight.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        imageRight.Controls.Add(lblImageInfo, 0, 0);
+        imageRight.Controls.Add(dedicatedImage, 0, 1);
+        imageSplit.Panel2.Controls.Add(imageRight);
+        tabImages.Controls.Add(imageSplit);
+
         var tabPacks = new TabPage("IDX/PAK 묶음");
         tabPacks.Controls.Add(gridPacks);
 
@@ -254,6 +294,7 @@ internal sealed class ClientInspectorForm : Form
 
         tabs.TabPages.Add(tabEntries);
         tabs.TabPages.Add(tabAllView);
+        tabs.TabPages.Add(tabImages);
         tabs.TabPages.Add(tabTexts);
         tabs.TabPages.Add(tabPacks);
         tabs.TabPages.Add(tabFiles);
@@ -314,12 +355,22 @@ internal sealed class ClientInspectorForm : Form
         gridAllView.SelectionChanged += async (_, _) => await PreviewUniversalSelectedAsync();
         universalSprFrame.ValueChanged += async (_, _) => await RenderUniversalSprFrameAsync();
 
+        btnImageFilter.Click += (_, _) => ApplyImageFilter();
+        txtImageFilter.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; ApplyImageFilter(); }
+        };
+        btnImageReset.Click += (_, _) => { txtImageFilter.Clear(); ApplyImageFilter(); };
+        btnImageSave.Click += async (_, _) => await SaveCurrentImageRawAsync();
+        gridImages.SelectionChanged += async (_, _) => await PreviewDedicatedImageAsync();
+
         FormClosed += (_, _) =>
         {
             foreach (var s in scanners.Values) s.Dispose();
             preview.Image?.Dispose();
             universalImage.Image?.Dispose();
             universalSpr.Image?.Dispose();
+            dedicatedImage.Image?.Dispose();
         };
 
         ConfigureColumnsAfterBinding();
@@ -357,6 +408,11 @@ internal sealed class ClientInspectorForm : Form
         {
             HideColumn(gridAllView, nameof(UniversalRow.SourceKey));
             FillColumn(gridAllView, nameof(UniversalRow.Path));
+        };
+        gridImages.DataBindingComplete += (_, _) =>
+        {
+            HideColumn(gridImages, nameof(UniversalRow.SourceKey));
+            FillColumn(gridImages, nameof(UniversalRow.Path));
         };
     }
 
@@ -406,6 +462,8 @@ internal sealed class ClientInspectorForm : Form
             currentTextRows.Clear();
             allViewRows.Clear();
             currentViewRows.Clear();
+            imageRows.Clear();
+            currentImageRows.Clear();
             txtTextPreview.Clear();
             currentTextRaw = null;
             currentUniversalRaw = null;
@@ -415,6 +473,9 @@ internal sealed class ClientInspectorForm : Form
             universalImage.Image = null;
             universalSpr.Image?.Dispose();
             universalSpr.Image = null;
+            dedicatedImage.Image?.Dispose();
+            dedicatedImage.Image = null;
+            currentImageRaw = null;
             preview.Image?.Dispose();
             preview.Image = null;
 
@@ -427,8 +488,10 @@ internal sealed class ClientInspectorForm : Form
 
             BuildTextIndex();
             BuildUniversalIndex();
+            BuildImageIndex();
             ApplyTextFilter(false);
             ApplyUniversalFilter();
+            ApplyImageFilter();
             await ApplyFilterAsync(false);
             status.Text = $"완료: IDX/PAK {packRows.Count:N0}개, 내부 항목 {allEntries.Count:N0}개, 실제 파일 {fileRows.Count:N0}개, 전체보기 {allViewRows.Count:N0}개";
         }
@@ -582,6 +645,108 @@ internal sealed class ClientInspectorForm : Form
         });
     }
 
+
+    private void BuildImageIndex()
+    {
+        imageRows.Clear();
+        foreach (var row in allViewRows)
+        {
+            if (IsStandardImage(row.Extension))
+                imageRows.Add(row);
+        }
+    }
+
+    private void ApplyImageFilter()
+    {
+        string q = txtImageFilter.Text.Trim();
+        currentImageRows = imageRows
+            .Where(x => q.Length == 0 ||
+                        x.Path.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                        x.Container.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                        x.Extension.Contains(q, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        gridImages.DataSource = null;
+        gridImages.DataSource = new BindingList<UniversalRow>(currentImageRows);
+        status.Text = $"이미지 보기: {currentImageRows.Count:N0} / {imageRows.Count:N0}";
+    }
+
+    private async Task PreviewDedicatedImageAsync()
+    {
+        if (gridImages.SelectedRows.Count != 1) return;
+        if (gridImages.SelectedRows[0].DataBoundItem is not UniversalRow row) return;
+
+        try
+        {
+            byte[] data = await ReadUniversalBytesAsync(row);
+            currentImageRaw = data;
+            currentImageSuggestedName = Path.GetFileName(row.Path);
+
+            string detected = DetectImageFormat(data);
+            using var ms = new MemoryStream(data, writable: false);
+            using var img = Image.FromStream(ms, useEmbeddedColorManagement: true, validateImageData: true);
+            var clone = new Bitmap(img);
+
+            var old = dedicatedImage.Image;
+            dedicatedImage.Image = clone;
+            old?.Dispose();
+
+            lblImageInfo.Text = $"{row.Source} | {row.Path} | {clone.Width}x{clone.Height} | {data.Length:N0} bytes | {detected}" +
+                                (string.IsNullOrWhiteSpace(row.Container) ? "" : $" | {row.Container}");
+            status.Text = $"이미지 표시 완료: {row.Path}";
+        }
+        catch (Exception ex)
+        {
+            dedicatedImage.Image?.Dispose();
+            dedicatedImage.Image = null;
+            string head = currentImageRaw == null ? "" : Convert.ToHexString(currentImageRaw.Take(Math.Min(16, currentImageRaw.Length)).ToArray());
+            lblImageInfo.Text = $"이미지 표시 실패 | {row.Path} | HEAD={head} | {ex.Message}";
+            status.Text = "이미지 표시 실패";
+        }
+    }
+
+    private static string DetectImageFormat(byte[] data)
+    {
+        if (data.Length >= 8 &&
+            data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 &&
+            data[4] == 0x0D && data[5] == 0x0A && data[6] == 0x1A && data[7] == 0x0A)
+            return "PNG";
+
+        if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
+            return "JPEG";
+
+        if (data.Length >= 6 &&
+            data[0] == (byte)'G' && data[1] == (byte)'I' && data[2] == (byte)'F' &&
+            data[3] == (byte)'8' && (data[4] == (byte)'7' || data[4] == (byte)'9') && data[5] == (byte)'a')
+            return "GIF";
+
+        if (data.Length >= 2 && data[0] == (byte)'B' && data[1] == (byte)'M')
+            return "BMP";
+
+        if (data.Length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 1 && data[3] == 0)
+            return "ICO";
+
+        return "확장자 기반/미확인";
+    }
+
+    private async Task SaveCurrentImageRawAsync()
+    {
+        if (currentImageRaw == null)
+        {
+            MessageBox.Show(this, "먼저 '이미지 보기'에서 이미지를 선택하세요.");
+            return;
+        }
+
+        using var dlg = new SaveFileDialog
+        {
+            FileName = string.IsNullOrWhiteSpace(currentImageSuggestedName) ? "image.bin" : currentImageSuggestedName,
+            Filter = "모든 파일 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        await File.WriteAllBytesAsync(dlg.FileName, currentImageRaw);
+        status.Text = "이미지 원본 저장 완료";
+    }
+
     private void ApplyUniversalFilter()
     {
         string q = txtAllFilter.Text.Trim();
@@ -637,16 +802,16 @@ internal sealed class ClientInspectorForm : Form
                 universalPreviewTabs.SelectedIndex = 0;
                 lblAllInfo.Text += $" | {decoded.EncodingName}";
             }
-            else if (IsStandardImage(ext))
+            else if (IsStandardImage(ext) || DetectImageFormat(data) != "확장자 기반/미확인")
             {
-                using var ms = new MemoryStream(data);
-                using var img = Image.FromStream(ms);
+                using var ms = new MemoryStream(data, writable: false);
+                using var img = Image.FromStream(ms, useEmbeddedColorManagement: true, validateImageData: true);
                 var clone = new Bitmap(img);
                 var old = universalImage.Image;
                 universalImage.Image = clone;
                 old?.Dispose();
                 universalPreviewTabs.SelectedIndex = 1;
-                lblAllInfo.Text += $" | {clone.Width}x{clone.Height}";
+                lblAllInfo.Text += $" | {clone.Width}x{clone.Height} | {DetectImageFormat(data)}";
             }
             else if (ext.Equals(".spr", StringComparison.OrdinalIgnoreCase))
             {
@@ -707,7 +872,9 @@ internal sealed class ClientInspectorForm : Form
         ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
         ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
         ext.Equals(".gif", StringComparison.OrdinalIgnoreCase) ||
-        ext.Equals(".ico", StringComparison.OrdinalIgnoreCase);
+        ext.Equals(".ico", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
+        ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase);
 
     private static string MakeHexDump(byte[] data, int maxBytes)
     {
