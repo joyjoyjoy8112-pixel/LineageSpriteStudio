@@ -604,6 +604,33 @@ internal sealed class ClientInspectorForm : Form
 
             bool shortNumeric = q.All(char.IsDigit) && q.Length <= 3;
 
+            if (!shortNumeric)
+            {
+                var pscRows = allRows
+                    .Where(r => r.Extension.Equals(".psc", StringComparison.OrdinalIgnoreCase) &&
+                                (r.Source == "DB백업" || r.Source == "서버팩"))
+                    .ToList();
+
+                foreach (var psc in pscRows)
+                {
+                    var pscHits = await SearchPscAsync(psc, q, Math.Min(50, MaxResults - results.Count));
+                    foreach (var hit in pscHits)
+                        AddResult(hit);
+
+                    if (results.Count >= MaxResults)
+                    {
+                        truncated = true;
+                        break;
+                    }
+
+                    if (pscHits.Count > 0)
+                    {
+                        status.Text = $"PSC 정확 검색: {psc.Path} | 발견 {results.Count:N0}";
+                        Application.DoEvents();
+                    }
+                }
+            }
+
             var sqlBackups = shortNumeric
                 ? new List<ViewRow>()
                 : allRows
@@ -699,6 +726,148 @@ internal sealed class ClientInspectorForm : Form
         {
             SetBusy(false);
         }
+    }
+
+    private async Task<List<ViewRow>> SearchPscAsync(ViewRow sourceRow, string query, int limit)
+    {
+        var results = new List<ViewRow>();
+        if (limit <= 0 || string.IsNullOrWhiteSpace(query))
+            return results;
+
+        try
+        {
+            byte[] compressed = await ReadBytesAsync(sourceRow);
+            byte[] data = InflatePscIfNeeded(compressed);
+
+            var offsets = FindStrictOffsets(data, query, limit);
+            foreach (long offset in offsets)
+            {
+                string context = MakePscContext(data, offset, query);
+
+                results.Add(new ViewRow
+                {
+                    Source = "PSC 검색",
+                    Type = "DB백업",
+                    Path = sourceRow.Path,
+                    Container = sourceRow.Container,
+                    Extension = ".psc",
+                    SizeBytes = context.Length,
+                    SourceKey = sourceRow.SourceKey,
+                    SearchText = context,
+                    Match = $"PSC 실제값 @ 0x{offset:X}"
+                });
+            }
+        }
+        catch
+        {
+            // 압축 형식이 다른 PSC는 일반 파일명 검색만 유지한다.
+        }
+
+        return results;
+    }
+
+    private static byte[] InflatePscIfNeeded(byte[] data)
+    {
+        if (data.Length < 2)
+            return data;
+
+        bool looksZlib =
+            data[0] == 0x78 &&
+            (data[1] == 0x01 || data[1] == 0x5E || data[1] == 0x9C || data[1] == 0xDA);
+
+        if (!looksZlib)
+            return data;
+
+        using var input = new MemoryStream(data, writable: false);
+        using var zs = new ZLibStream(input, CompressionMode.Decompress);
+        using var output = new MemoryStream();
+        zs.CopyTo(output);
+        return output.ToArray();
+    }
+
+    private static List<long> FindStrictOffsets(byte[] data, string query, int limit)
+    {
+        var result = new List<long>();
+        if (data.Length == 0 || string.IsNullOrEmpty(query) || limit <= 0)
+            return result;
+
+        bool numeric = query.All(char.IsDigit);
+        var patterns = BuildSearchPatterns(query);
+
+        foreach (var pattern in patterns)
+        {
+            int start = 0;
+
+            while (start <= data.Length - pattern.Length && result.Count < limit)
+            {
+                int idx = data.AsSpan(start).IndexOf(pattern);
+                if (idx < 0) break;
+                idx += start;
+
+                bool valid = true;
+
+                if (numeric && pattern.All(b => b >= (byte)'0' && b <= (byte)'9'))
+                {
+                    bool leftOk = idx == 0 || data[idx - 1] < (byte)'0' || data[idx - 1] > (byte)'9';
+                    int after = idx + pattern.Length;
+                    bool rightOk = after >= data.Length || data[after] < (byte)'0' || data[after] > (byte)'9';
+                    valid = leftOk && rightOk;
+                }
+
+                if (valid && !result.Contains(idx))
+                    result.Add(idx);
+
+                start = idx + Math.Max(1, pattern.Length);
+            }
+
+            if (result.Count >= limit)
+                break;
+        }
+
+        result.Sort();
+        return result;
+    }
+
+    private static string MakePscContext(byte[] data, long offset, string query)
+    {
+        int center = (int)Math.Clamp(offset, 0, data.Length);
+        int start = Math.Max(0, center - 700);
+        int end = Math.Min(data.Length, center + Math.Max(query.Length, 1) + 1200);
+        byte[] slice = data[start..end];
+
+        Encoding enc;
+        int probe = Math.Min(data.Length, 512);
+
+        if (Encoding.ASCII.GetString(data, 0, probe).Contains("euckr", StringComparison.OrdinalIgnoreCase))
+            enc = Encoding.GetEncoding(949);
+        else
+            enc = new UTF8Encoding(false, false);
+
+        string text = enc.GetString(slice);
+
+        var sb = new StringBuilder(text.Length);
+        bool lastSep = false;
+
+        foreach (char c in text)
+        {
+            bool control = char.IsControl(c) && c != '\r' && c != '\n' && c != '\t';
+
+            if (control)
+            {
+                if (!lastSep)
+                {
+                    sb.Append(" · ");
+                    lastSep = true;
+                }
+            }
+            else
+            {
+                sb.Append(c);
+                lastSep = false;
+            }
+        }
+
+        return $"[PSC 압축해제 검색]\r\n원본 Offset: 0x{offset:X}\r\n\r\n" + sb;
     }
 
     private static List<ViewRow> SearchSqlDump(string path, string query, int limit)
@@ -1054,7 +1223,7 @@ internal sealed class ClientInspectorForm : Form
             return ms.ToArray();
         }
 
-        if (row.Source == "DB SQL")
+        if (row.Source == "DB SQL" || row.Source == "PSC 검색")
             return Encoding.UTF8.GetBytes(row.SearchText ?? "");
 
         if (row.Source == "PSC 내부" && row.SourceKey.StartsWith("PSCZIP|", StringComparison.Ordinal))
