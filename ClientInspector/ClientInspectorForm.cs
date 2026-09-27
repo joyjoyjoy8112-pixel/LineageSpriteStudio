@@ -113,7 +113,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V1.6 - 클라 + Navicat PSC 통합 검색";
+        Text = "Lineage Client Inspector V1.7 - 의미있는 통합 검색";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
