@@ -153,12 +153,12 @@ internal sealed class SpritePak : IDisposable
 
     public byte[] Extract(Entry e)
     {
-        int stored = (e.Flags == 2 && e.CompressedSize > 0) ? e.CompressedSize : e.FileSize;
-        var raw = new byte[stored];
-        using var fs = new FileStream(PakPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        fs.Position = e.Offset;
-        fs.ReadExactly(raw);
+        byte[] raw = ReadStoredBytes(e);
         if (IsDesEncrypted) DesTransform(raw, false);
+
+        if (e.Flags == 1 && e.CompressedSize > 0)
+            return DecodeFlag1(raw, e.FileSize).Data;
+
         if (e.Flags == 2 && e.CompressedSize > 0)
         {
             using var input = new MemoryStream(raw);
@@ -167,7 +167,84 @@ internal sealed class SpritePak : IDisposable
             br.CopyTo(output);
             return output.ToArray();
         }
+
         return raw;
+    }
+
+    public byte[] ReadStoredBytes(Entry e)
+    {
+        int stored = ((e.Flags == 1 || e.Flags == 2) && e.CompressedSize > 0)
+            ? e.CompressedSize
+            : e.FileSize;
+
+        if (stored < 0)
+            throw new InvalidDataException($"음수 저장 크기: {e.FileName}");
+
+        var raw = new byte[stored];
+        using var fs = new FileStream(PakPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        fs.Position = e.Offset;
+        fs.ReadExactly(raw);
+        return raw;
+    }
+
+    private enum Flag1Codec
+    {
+        Zlib,
+        Deflate
+    }
+
+    private static (byte[] Data, Flag1Codec Codec) DecodeFlag1(byte[] raw, int expectedSize)
+    {
+        Exception? zlibError = null;
+
+        try
+        {
+            using var input = new MemoryStream(raw);
+            using var z = new ZLibStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            z.CopyTo(output);
+            byte[] decoded = output.ToArray();
+            if (expectedSize <= 0 || decoded.Length == expectedSize)
+                return (decoded, Flag1Codec.Zlib);
+        }
+        catch (Exception ex)
+        {
+            zlibError = ex;
+        }
+
+        try
+        {
+            using var input = new MemoryStream(raw);
+            using var d = new DeflateStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            d.CopyTo(output);
+            byte[] decoded = output.ToArray();
+            if (expectedSize <= 0 || decoded.Length == expectedSize)
+                return (decoded, Flag1Codec.Deflate);
+        }
+        catch { }
+
+        throw new InvalidDataException(
+            $"_EXT Flags=1 압축 해제 실패. expected={expectedSize:N0}, stored={raw.Length:N0}",
+            zlibError);
+    }
+
+    private static byte[] EncodeFlag1(byte[] data, Flag1Codec codec)
+    {
+        using var output = new MemoryStream();
+
+        if (codec == Flag1Codec.Zlib)
+        {
+            using (var z = new ZLibStream(output, CompressionLevel.Optimal, leaveOpen: true))
+                z.Write(data, 0, data.Length);
+        }
+        else
+        {
+            using (var d = new DeflateStream(output, CompressionLevel.Optimal, leaveOpen: true))
+                d.Write(data, 0, data.Length);
+        }
+
+        return output.ToArray();
     }
 
     public string ReplaceEntryMinimal(string fileName, byte[] replacement)
@@ -200,6 +277,15 @@ internal sealed class SpritePak : IDisposable
             newCompressedSize = 0;
             newFlags = 0;
         }
+        else if (e.Flags == 1 && e.CompressedSize > 0)
+        {
+            byte[] originalStored = ReadStoredBytes(e);
+            var originalCodec = DecodeFlag1(originalStored, e.FileSize).Codec;
+            storedReplacement = EncodeFlag1(replacement, originalCodec);
+            newFileSize = replacement.Length;
+            newCompressedSize = storedReplacement.Length;
+            newFlags = 1;
+        }
         else if (e.Flags == 2 && e.CompressedSize > 0)
         {
             using var compressed = new MemoryStream();
@@ -214,12 +300,14 @@ internal sealed class SpritePak : IDisposable
             storedReplacement = compressed.ToArray();
             newFileSize = replacement.Length;
             newCompressedSize = storedReplacement.Length;
+            newFlags = 2;
         }
-        else if (e.Flags == 0 || e.Flags == 1)
+        else if (e.Flags == 0)
         {
             storedReplacement = replacement;
             newFileSize = replacement.Length;
             newCompressedSize = 0;
+            newFlags = 0;
         }
         else
         {
@@ -228,7 +316,9 @@ internal sealed class SpritePak : IDisposable
         }
 
         int originalStoredSize =
-            e.Flags == 2 && e.CompressedSize > 0 ? e.CompressedSize : e.FileSize;
+            ((e.Flags == 1 || e.Flags == 2) && e.CompressedSize > 0)
+                ? e.CompressedSize
+                : e.FileSize;
 
         long targetOffset = e.Offset;
         string mode;
@@ -360,7 +450,7 @@ internal sealed class SpritePak : IDisposable
                 FileSize = e.FileSize,
                 CompressedSize = e.CompressedSize,
                 Flags = e.Flags,
-                StoredSize = (e.Flags == 2 && e.CompressedSize > 0)
+                StoredSize = ((e.Flags == 1 || e.Flags == 2) && e.CompressedSize > 0)
                     ? e.CompressedSize
                     : e.FileSize
             })
@@ -392,7 +482,19 @@ internal sealed class SpritePak : IDisposable
                         }
                         else
                         {
-                            if (item.Flags == 2 && item.CompressedSize > 0)
+                            if (item.Flags == 1 && item.CompressedSize > 0)
+                            {
+                                byte[] originalStored = new byte[item.StoredSize];
+                                src.Position = item.Offset;
+                                src.ReadExactly(originalStored);
+                                var originalCodec = DecodeFlag1(originalStored, item.FileSize).Codec;
+
+                                storedReplacement = EncodeFlag1(replacement, originalCodec);
+                                item.Entry.FileSize = replacement.Length;
+                                item.Entry.CompressedSize = storedReplacement.Length;
+                                item.Entry.Flags = 1;
+                            }
+                            else if (item.Flags == 2 && item.CompressedSize > 0)
                             {
                                 using var compressed = new MemoryStream();
                                 using (var br = new BrotliStream(
@@ -408,14 +510,12 @@ internal sealed class SpritePak : IDisposable
                                 item.Entry.CompressedSize = storedReplacement.Length;
                                 item.Entry.Flags = 2;
                             }
-                            else if (item.Flags == 0 || item.Flags == 1)
+                            else if (item.Flags == 0)
                             {
-                                // AnyPakScanner도 _EXT Flags 0/1은 FileSize만큼 RAW로 읽는다.
-                                // 따라서 Flags=1 엔트리는 플래그를 그대로 유지한 RAW 데이터로 교체한다.
                                 storedReplacement = replacement;
                                 item.Entry.FileSize = replacement.Length;
                                 item.Entry.CompressedSize = 0;
-                                item.Entry.Flags = item.Flags;
+                                item.Entry.Flags = 0;
                             }
                             else
                             {
