@@ -182,7 +182,7 @@ internal sealed class ClientInspectorForm : Form
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-        Text = "Lineage Client Inspector V3.3 - EXT Flags1 SPR 저장검증";
+        Text = "Lineage Client Inspector V3.4 - SPR 최소변경 저장";
         Width = 1560;
         Height = 920;
         StartPosition = FormStartPosition.CenterScreen;
@@ -2479,7 +2479,7 @@ internal sealed class ClientInspectorForm : Form
             {
                 throw new InvalidOperationException(
                     $"현재 PAK 형식은 {scanner.Format}{(scanner.DesEncrypted ? " / DES" : "")} 입니다. " +
-                    "V3.3에서는 비암호화 LEGACY28 및 비암호화 _EXT PAK의 SPR 저장을 지원합니다.");
+                    "V3.4에서는 비암호화 LEGACY28 및 비암호화 _EXT PAK의 SPR 최소변경 저장을 지원합니다.");
             }
 
             string pakPath = Path.ChangeExtension(idxPath, ".pak");
@@ -2492,15 +2492,13 @@ internal sealed class ClientInspectorForm : Form
 
             try
             {
+                string saveMode;
                 using (var pak = new SpritePak(idxPath))
                 {
-                    pak.RebuildPak(new Dictionary<string, byte[]>
-                    {
-                        [currentRow.Path] = storedSpr
-                    });
+                    saveMode = pak.ReplaceEntryMinimal(currentRow.Path, storedSpr);
                 }
 
-                // RebuildPak 내부 검증에 더해 Inspector에서도 다시 추출하여 최종 바이트를 확인한다.
+                // 전체 PAK을 재묶지 않고 대상 엔트리 하나만 최소 변경한 뒤 재검증한다.
                 using (var verify = new AnyPakScanner(idxPath))
                 {
                     var verifyEntry = verify.Entries.FirstOrDefault(x =>
@@ -2543,7 +2541,7 @@ internal sealed class ClientInspectorForm : Form
             grid.Refresh();
 
             status.Text =
-                $"PAK SPR 저장/검증 완료: {currentRow.Path} | IDX/PAK 백업 생성 완료";
+                $"PAK SPR 최소변경 저장/검증 완료: {currentRow.Path} | mode={saveMode} | IDX/PAK 백업 생성 완료";
             return;
         }
 
