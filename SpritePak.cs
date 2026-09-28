@@ -170,6 +170,172 @@ internal sealed class SpritePak : IDisposable
         return raw;
     }
 
+    public string ReplaceEntryMinimal(string fileName, byte[] replacement)
+    {
+        if (IsDesEncrypted)
+            throw new InvalidOperationException("DES 암호화 PAK은 최소 변경 저장을 지원하지 않습니다.");
+
+        int entryIndex = Entries.FindIndex(e =>
+            e.FileName.Equals(fileName, StringComparison.OrdinalIgnoreCase));
+
+        if (entryIndex < 0)
+            throw new FileNotFoundException("PAK 엔트리를 찾을 수 없습니다.", fileName);
+
+        var e = Entries[entryIndex];
+        bool legacy = IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase);
+        bool ext = IndexFormat.Equals("_EXT", StringComparison.OrdinalIgnoreCase);
+
+        if (!legacy && !ext)
+            throw new InvalidOperationException($"최소 변경 저장 미지원 IDX 형식: {IndexFormat}");
+
+        byte[] storedReplacement;
+        int newFileSize;
+        int newCompressedSize;
+        int newFlags = e.Flags;
+
+        if (legacy)
+        {
+            storedReplacement = replacement;
+            newFileSize = replacement.Length;
+            newCompressedSize = 0;
+            newFlags = 0;
+        }
+        else if (e.Flags == 2 && e.CompressedSize > 0)
+        {
+            using var compressed = new MemoryStream();
+            using (var br = new BrotliStream(
+                compressed,
+                CompressionLevel.Optimal,
+                leaveOpen: true))
+            {
+                br.Write(replacement, 0, replacement.Length);
+            }
+
+            storedReplacement = compressed.ToArray();
+            newFileSize = replacement.Length;
+            newCompressedSize = storedReplacement.Length;
+        }
+        else if (e.Flags == 0 || e.Flags == 1)
+        {
+            storedReplacement = replacement;
+            newFileSize = replacement.Length;
+            newCompressedSize = 0;
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"최소 변경 저장에서 지원하지 않는 _EXT Flags={e.Flags}: {fileName}");
+        }
+
+        int originalStoredSize =
+            e.Flags == 2 && e.CompressedSize > 0 ? e.CompressedSize : e.FileSize;
+
+        long targetOffset = e.Offset;
+        string mode;
+
+        using (var pak = new FileStream(PakPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+        {
+            if (storedReplacement.Length <= originalStoredSize)
+            {
+                // 가장 안전한 경우: 원래 엔트리 위치를 그대로 사용한다.
+                // 다른 PAK 엔트리 offset과 IDX 레코드는 전혀 움직이지 않는다.
+                pak.Position = e.Offset;
+                pak.Write(storedReplacement, 0, storedReplacement.Length);
+
+                int tail = originalStoredSize - storedReplacement.Length;
+                if (tail > 0)
+                {
+                    byte[] zeros = new byte[Math.Min(tail, 64 * 1024)];
+                    while (tail > 0)
+                    {
+                        int n = Math.Min(tail, zeros.Length);
+                        pak.Write(zeros, 0, n);
+                        tail -= n;
+                    }
+                }
+
+                targetOffset = e.Offset;
+                mode = storedReplacement.Length == originalStoredSize
+                    ? "IN_PLACE_EXACT"
+                    : "IN_PLACE_SHORTER";
+            }
+            else
+            {
+                // 크기가 커진 경우에도 전체 PAK을 재묶지 않는다.
+                // 수정한 엔트리 하나만 PAK 끝에 추가하고 그 엔트리의 IDX 필드만 갱신한다.
+                long pos = pak.Length;
+
+                // 기존 엔트리와 동일한 4-byte 정렬을 유지한다.
+                long aligned = (pos + 3L) & ~3L;
+                if (aligned > pos)
+                {
+                    pak.Position = pos;
+                    for (long i = pos; i < aligned; i++)
+                        pak.WriteByte(0);
+                }
+
+                targetOffset = aligned;
+                pak.Position = targetOffset;
+                pak.Write(storedReplacement, 0, storedReplacement.Length);
+                mode = "APPEND_TARGET_ONLY";
+            }
+
+            pak.Flush(true);
+        }
+
+        if (targetOffset > uint.MaxValue)
+            throw new InvalidDataException("새 PAK offset이 32비트 범위를 초과했습니다.");
+
+        // IDX 전체를 재생성하지 않고 원본 IDX 바이트에서 대상 레코드의
+        // offset/size 필드만 직접 갱신한다.
+        byte[] idx = File.ReadAllBytes(IdxPath);
+
+        if (legacy)
+        {
+            int p = checked(4 + entryIndex * 28);
+            BitConverter.GetBytes((uint)targetOffset).CopyTo(idx, p);
+            BitConverter.GetBytes(newFileSize).CopyTo(idx, p + 24);
+        }
+        else
+        {
+            int p = checked(8 + entryIndex * 128);
+            BitConverter.GetBytes((uint)targetOffset).CopyTo(idx, p);
+            BitConverter.GetBytes(newFileSize).CopyTo(idx, p + 4);
+            BitConverter.GetBytes(newCompressedSize).CopyTo(idx, p + 8);
+            BitConverter.GetBytes(newFlags).CopyTo(idx, p + 12);
+        }
+
+        string idxTmp = IdxPath + ".minimal.tmp";
+        File.WriteAllBytes(idxTmp, idx);
+        File.Move(idxTmp, IdxPath, true);
+
+        // 메모리 엔트리도 현재 값으로 갱신.
+        e.Offset = targetOffset;
+        e.FileSize = newFileSize;
+        e.CompressedSize = newCompressedSize;
+        e.Flags = newFlags;
+
+        // 실제 파일을 다시 열어 동일 바이트인지 검증.
+        using (var verify = new SpritePak(IdxPath))
+        {
+            var ve = verify.Entries.FirstOrDefault(x =>
+                x.FileName.Equals(fileName, StringComparison.OrdinalIgnoreCase));
+
+            if (ve == null)
+                throw new InvalidDataException($"최소 변경 저장 검증 실패 - 엔트리 없음: {fileName}");
+
+            byte[] actual = verify.Extract(ve);
+            if (!actual.AsSpan().SequenceEqual(replacement))
+            {
+                throw new InvalidDataException(
+                    $"최소 변경 저장 검증 실패: {fileName} / " +
+                    $"expected={replacement.Length:N0}, actual={actual.Length:N0}");
+            }
+        }
+
+        return mode;
+    }
+
     public void RebuildPak(IReadOnlyDictionary<string, byte[]> replacements)
     {
         bool legacy = IndexFormat.Equals("LEGACY28", StringComparison.OrdinalIgnoreCase);
