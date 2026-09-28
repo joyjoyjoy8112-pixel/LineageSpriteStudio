@@ -2490,9 +2490,9 @@ internal sealed class ClientInspectorForm : Form
             File.Copy(idxPath, idxBackup, false);
             File.Copy(pakPath, pakBackup, false);
 
+            string saveMode = "";
             try
             {
-                string saveMode;
                 using (var pak = new SpritePak(idxPath))
                 {
                     saveMode = pak.ReplaceEntryMinimal(currentRow.Path, storedSpr);
